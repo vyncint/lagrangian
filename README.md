@@ -1,10 +1,19 @@
 # lagrangian
 
+[![crates.io](https://img.shields.io/crates/v/lagrangian.svg)](https://crates.io/crates/lagrangian)
+[![docs.rs](https://img.shields.io/docsrs/lagrangian)](https://docs.rs/lagrangian)
+[![CI](https://github.com/vyncint/lagrangian/actions/workflows/ci.yml/badge.svg)](https://github.com/vyncint/lagrangian/actions/workflows/ci.yml)
+
 **Write the Lagrangian. Get the motion.** A mechanics engine for Rust: you write `L = T − V` as an ordinary generic function, and the crate differentiates it into exact equations of motion, integrates them, and hands back a trajectory you can sample at any time.
 
 No equation of motion, mass matrix, Coriolis term or Jacobian is ever derived by hand. No dependencies. Works without `std` and without an allocator.
 
-> **Status: pre-release.** The core crate is implemented and verified; it is not on crates.io yet. The interactive playground and the Bevy plugin described in the [plan](https://github.com/vyncint/lagrangian/blob/main/PLAN.md) are not built.
+> **Status: 0.1.0, the first release.** The core crate is implemented and verified. It is pre-1.0, so a minor release may change the API. The interactive playground and the Bevy plugin described in the [plan](https://github.com/vyncint/lagrangian/blob/main/PLAN.md) are not built yet.
+
+```toml
+[dependencies]
+lagrangian = "0.1"
+```
 
 ```rust
 use lagrangian::prelude::*;
@@ -234,7 +243,7 @@ cargo run --release --example svg_showcase     # writes target/svg_showcase/
 
 ```toml
 # Bare metal: no std, no allocator. The engine, Stepper and Segment all work.
-lagrangian = { version = "0.0.1", default-features = false, features = ["libm"] }
+lagrangian = { version = "0.1", default-features = false, features = ["libm"] }
 ```
 
 Both claims are gates in CI: the dependency tree of each configuration is asserted exactly, and the crate is compiled for a bare-metal Cortex-M target and for `wasm32-unknown-unknown`. Minimum supported Rust version: 1.85.

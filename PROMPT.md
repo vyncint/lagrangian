@@ -12,6 +12,7 @@ Read `PLAN.md` first for positioning, scope and the measured baselines behind ev
 > - **`SimConfig` setters are named `with_*`** (`with_tolerances`, `with_max_steps`, …), and `Stepper::refresh` exists beside `system_mut`.
 > - **`SimError` has a sixth variant, `InvalidConfig`**, and a matrix holding a `NaN` is reported as `NonFiniteState` rather than `SingularMassMatrix`.
 > - **`linearize_free`** is the name of the linearization for systems without inputs.
+> - **`0.1.0` was released on 2026-11-25 with the core crate alone**, not with the playground and the Bevy plugin as the execution plan below has it.
 > - **Not built yet:** `benches`, `examples/ode_adapters`, `examples/egui_playground`, `crates/bevy_lagrangian`.
 
 ## Core Philosophy & Non-Negotiable Constraints

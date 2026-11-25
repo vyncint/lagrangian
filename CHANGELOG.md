@@ -10,6 +10,10 @@ heading, in a bullet that begins **Breaking:**.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
+The first release: the core crate.
+
 ### Added
 
 - The `Lagrangian<N>` trait: a mechanical system is one generic function,
@@ -50,3 +54,6 @@ heading, in a bullet that begins **Breaking:**.
 - The `svg_showcase` example: phase portraits, Poincaré sections, light
   bending around a black hole and energy-error comparisons as dependency-free
   SVG.
+
+[Unreleased]: https://github.com/vyncint/lagrangian/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/vyncint/lagrangian/releases/tag/v0.1.0
