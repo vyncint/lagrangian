@@ -32,7 +32,10 @@ serde = { version = "1", default-features = false }
 
 # Dev dependencies.
 # The one dev-dependency the core is allowed: the serde round-trip test.
-serde_json = "1"
+# `float_roundtrip` because serde_json's default float parser is fast and
+# occasionally one ulp off, and the test asserts every coefficient comes back
+# bit for bit.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [workspace.lints.rust]
 rust_2018_idioms = { level = "warn", priority = -1 }
