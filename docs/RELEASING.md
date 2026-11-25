@@ -4,37 +4,22 @@ One page, copy-pasteable. Maintainers only.
 
 ## Prerequisites
 
-- Publishing auth is a **crates.io API token** held as the repository secret
-  `CARGO_REGISTRY_TOKEN`. `release.yml` passes it to `cargo publish`.
-  `0.1.0`, the crate's first release, had to go out this way: Trusted
-  Publishing is linked to a crate that already exists.
-- The publish job runs in the **`release` GitHub environment**. GitHub
-  creates it the first time the workflow runs, with no rules. Restrict it to
-  `v*` tags (Settings → Environments → release → Deployment branches and
-  tags), so the token can never be used from a branch.
+All of these are in place; this is what to check if a release fails.
 
-## Moving to Trusted Publishing
-
-Worth doing before the second release: it replaces a long-lived secret with a
-token that lives for one job.
-
-1. crates.io → `lagrangian` → Settings → Trusted Publishing → GitHub:
-   repository `vyncint/lagrangian`, workflow `release.yml`, environment
-   `release`.
-2. In `release.yml`'s `publish` job, grant `id-token: write` beside
-   `contents: read`, and replace the publish step with:
-
-   ```yaml
-   - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-     id: auth
-   - run: cargo publish -p lagrangian --locked
-     env:
-       CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-   ```
-
-3. Delete the `CARGO_REGISTRY_TOKEN` secret and revoke the token on
-   crates.io.
-4. Update SECURITY.md's "Release integrity" bullet and this section.
+- **Publishing is authenticated by crates.io Trusted Publishing.**
+  crates.io → `lagrangian` → Settings → Trusted Publishing has a GitHub
+  publisher for repository `vyncint/lagrangian`, workflow `release.yml` and
+  environment `release`. The `publish` job holds `id-token: write`, and
+  `rust-lang/crates-io-auth-action` exchanges the job's OIDC token for a
+  publish token that lives for the job and is revoked at its end. No
+  publish token is stored: `0.1.0`, the first release, went out with an API
+  token, since Trusted Publishing links to a crate that already exists, and
+  that token was deleted before `0.1.1`.
+- **The `release` environment deploys only from tags matching `v*`**
+  (Settings → Environments → release → Deployment branches and tags), so a
+  publish token can never be minted from a branch.
+- **Only a maintainer can push such a tag.** The `release tags` ruleset
+  limits creating, moving and deleting `refs/tags/v*` to the admin role.
 
 ## What may break
 
@@ -46,9 +31,10 @@ in `CHANGELOG.md`. `Scalar` is sealed, so adding a method to it is not a
 break; the `ad` module is exempt from semver until 1.0
 ([CLAUDE.md](../CLAUDE.md), "API Stability Rules").
 
-There is no automated semver gate yet. `cargo-semver-checks` compares
-against a published release, and `0.1.0` is the first, so the gate can be
-added now: a `semver` job in `ci.yml` with its line in CONTRIBUTING §1.
+There is no semver gate in CI yet. Before a release, run
+`cargo semver-checks -p lagrangian` against the previous release by hand
+(step 3 below); a gate is a `semver` job in `ci.yml` with its line in
+CONTRIBUTING §1.
 
 ## Cutting vX.Y.Z
 
@@ -80,6 +66,7 @@ cargo check
 #    measured baseline; PLAN.md §7.1 must describe the tree being released.
 cargo test --workspace --all-features --release -- --nocapture | grep '^measured'
 tools/preflight.sh
+cargo semver-checks -p lagrangian --baseline-version PREV   # cargo install cargo-semver-checks
 
 # 4. Check what will be uploaded. This builds the package from the tarball.
 cargo publish -p lagrangian --locked --dry-run
@@ -106,10 +93,11 @@ point at which a mistake costs nothing.
 - **`ci` failed**: nothing was published. Fix on `main` through a pull
   request, delete the tag, tag the new commit.
 - **`publish` failed**: nothing was published unless the log says
-  otherwise. A 403 means the token is missing, expired, or not allowed to
-  publish this crate: the `CARGO_REGISTRY_TOKEN` secret, or its scopes on
-  crates.io. Fix the secret and re-run the failed job; the tag is still
-  right.
+  otherwise. If the `auth` step failed, or `cargo publish` answered 403,
+  the Trusted Publishing link does not match this run: on crates.io the
+  repository, the workflow file name and the environment must be exactly
+  `vyncint/lagrangian`, `release.yml` and `release`. Fix the link and
+  re-run the failed job; the tag is still right.
 - **`github-release` failed**: the crate *is* on crates.io, and a version
   cannot be published twice. Do not delete the tag; re-run the failed job,
   or create the release by hand from

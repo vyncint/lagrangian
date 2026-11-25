@@ -90,6 +90,18 @@ heading, in a bullet that begins **Breaking:**.
   overflows between the ends of its segment, or an initial state that is not
   finite ([#8]). `Trajectory::push` holds a segment to the same rules.
 
+### Security
+
+- Releases are published through crates.io Trusted Publishing ([#10]): the
+  release job exchanges its OIDC token for a crates.io token that lives for
+  that job. The API token that published 0.1.0 is deleted, and no publish
+  token is stored anywhere.
+- The repository enforces what CONTRIBUTING and SECURITY.md describe ([#9]):
+  private vulnerability reporting, secret scanning with push protection, a
+  ruleset on `main` that requires a pull request and both required checks,
+  a ruleset that lets only a maintainer push a `v*` tag, a `release`
+  environment that deploys only from such tags, and an allowlist of the
+  actions the workflows pin.
 
 ## [0.1.0] - 2026-11-25
 
@@ -142,6 +154,8 @@ The first release: the core crate.
 [#6]: https://github.com/vyncint/lagrangian/issues/6
 [#7]: https://github.com/vyncint/lagrangian/issues/7
 [#8]: https://github.com/vyncint/lagrangian/issues/8
+[#9]: https://github.com/vyncint/lagrangian/issues/9
+[#10]: https://github.com/vyncint/lagrangian/issues/10
 [#11]: https://github.com/vyncint/lagrangian/issues/11
 [#12]: https://github.com/vyncint/lagrangian/issues/12
 [#13]: https://github.com/vyncint/lagrangian/issues/13
