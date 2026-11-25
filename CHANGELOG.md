@@ -10,6 +10,11 @@ heading, in a bullet that begins **Breaking:**.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-25
+
+The fixes for what a deep test of 0.1.0 found, with a focus on security and
+performance: milestone 0.1.1.
+
 ### Added
 
 - A performance section in the README and the crate documentation, measured
@@ -148,7 +153,8 @@ The first release: the core crate.
   bending around a black hole and energy-error comparisons as dependency-free
   SVG.
 
-[Unreleased]: https://github.com/vyncint/lagrangian/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vyncint/lagrangian/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/vyncint/lagrangian/compare/v0.1.0...v0.1.1
 [#4]: https://github.com/vyncint/lagrangian/issues/4
 [#5]: https://github.com/vyncint/lagrangian/issues/5
 [#6]: https://github.com/vyncint/lagrangian/issues/6

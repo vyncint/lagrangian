@@ -8,7 +8,7 @@
 
 No equation of motion, mass matrix, Coriolis term or Jacobian is ever derived by hand. No dependencies. Works without `std` and without an allocator.
 
-> **Status: 0.1.0, the first release.** The core crate is implemented and verified. It is pre-1.0, so a minor release may change the API. The interactive playground and the Bevy plugin described in the [plan](https://github.com/vyncint/lagrangian/blob/main/PLAN.md) are not built yet.
+> **Status: 0.1.1.** The core crate is implemented and verified, and 0.1.1 fixes what a deep test of the first release found. It is pre-1.0, so a minor release may change the API. The interactive playground and the Bevy plugin described in the [plan](https://github.com/vyncint/lagrangian/blob/main/PLAN.md) are not built yet.
 
 ```toml
 [dependencies]
