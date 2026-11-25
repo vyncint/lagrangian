@@ -238,7 +238,8 @@ impl<const N: usize> Trajectory<N> {
             .min(self.segments.len() - 1)
     }
 
-    /// The state at time `t`, clamped to the trajectory.
+    /// The state at time `t`, clamped to the trajectory. A `t` that is `NaN`
+    /// gives a state of `NaN`s.
     pub fn sample(&self, t: f64) -> State<N> {
         if self.segments.is_empty() || t <= self.t_start() {
             return self.start();
@@ -463,7 +464,9 @@ impl<const N: usize> Trajectory<N> {
         direction: CrossingDirection,
         interior_samples: usize,
     ) -> Vec<State<N>> {
-        let pieces = interior_samples + 1;
+        // Saturating: `usize::MAX` interior samples is a strange request, but
+        // it must not be an arithmetic overflow.
+        let pieces = interior_samples.saturating_add(1);
         let mut found = Vec::new();
         for (index, seg) in self.segments.iter().enumerate() {
             // The value at a shared knot is taken from the segment that
