@@ -350,13 +350,18 @@ impl<T: Scalar> Scalar for Dual<T> {
     #[inline]
     fn atan2(self, x: Self) -> Self {
         let val = self.val.atan2(x.val);
-        let den = x.val * x.val + self.val * self.val;
-        if den.value() == 0.0 {
+        // (x·dy − y·dx) / r², with x and y scaled by r = hypot(x, y) before
+        // anything is squared: x² + y² underflows to zero below
+        // |(x, y)| ≈ 1e-154, where the derivative is enormous, and 0.1.0
+        // returned zero there (#16).
+        let r = self.val.hypot(x.val);
+        if r.value() == 0.0 {
             return Self::constant(val);
         }
+        let (xs, ys) = (x.val / r, self.val / r);
         Self {
             val,
-            eps: (x.val * self.eps - self.val * x.eps) / den,
+            eps: (xs * self.eps - ys * x.eps) / r,
         }
     }
     #[inline]
@@ -395,9 +400,11 @@ impl<T: Scalar> Scalar for Dual<T> {
         if h.value() == 0.0 {
             return Self::constant(h);
         }
+        // (a·da + b·db) / h, with a and b divided by h first: a product of a
+        // tiny value and a tiny derivative underflows, as in `atan2` (#16).
         Self {
             val: h,
-            eps: (self.val * self.eps + other.val * other.eps) / h,
+            eps: (self.val / h) * self.eps + (other.val / h) * other.eps,
         }
     }
     #[inline]
@@ -613,12 +620,13 @@ impl<const N: usize> Scalar for Grad<N> {
     #[inline]
     fn atan2(self, x: Self) -> Self {
         let val = math::atan2(self.val, x.val);
-        let den = x.val * x.val + self.val * self.val;
-        if den == 0.0 {
+        // Scaled before squaring, as for `Dual` (#16).
+        let r = math::hypot(self.val, x.val);
+        if r == 0.0 {
             return Self::constant(val);
         }
-        let (yv, xv) = (self.val, x.val);
-        self.zip(x, val, |dy, dx| (xv * dy - yv * dx) / den)
+        let (ys, xs) = (self.val / r, x.val / r);
+        self.zip(x, val, |dy, dx| (xs * dy - ys * dx) / r)
     }
     #[inline]
     fn sinh(self) -> Self {
@@ -652,8 +660,9 @@ impl<const N: usize> Scalar for Grad<N> {
         if h == 0.0 {
             return Self::constant(0.0);
         }
-        let (a, b) = (self.val, other.val);
-        self.zip(other, h, |da, db| (a * da + b * db) / h)
+        // Scaled before multiplying, as for `Dual`.
+        let (ua, ub) = (self.val / h, other.val / h);
+        self.zip(other, h, |da, db| ua * da + ub * db)
     }
     #[inline]
     fn powi(self, n: i32) -> Self {
@@ -865,12 +874,17 @@ impl Scalar for Taylor2 {
     }
     #[inline]
     fn atan2(self, x: Self) -> Self {
-        let (y, x) = (self, x);
-        let c0 = math::atan2(y.c0, x.c0);
-        let d0 = x.c0 * x.c0 + y.c0 * y.c0;
-        if d0 == 0.0 {
+        let c0 = math::atan2(self.c0, x.c0);
+        // atan2 is unchanged when both arguments are divided by the same
+        // positive number, and so are the coefficients below. Dividing by
+        // r = hypot(x, y) first keeps x² + y² near one instead of letting it
+        // underflow (#16).
+        let r = math::hypot(self.c0, x.c0);
+        if r == 0.0 {
             return Self::constant(c0);
         }
+        let (y, x) = (self / r, x / r);
+        let d0 = x.c0 * x.c0 + y.c0 * y.c0;
         // θ' = (x·y' − y·x') / (x² + y²), expanded to first order in τ and
         // integrated once.
         let n0 = x.c0 * y.c1 - y.c0 * x.c1;
@@ -915,13 +929,14 @@ impl Scalar for Taylor2 {
         if h == 0.0 {
             return Self::constant(0.0);
         }
-        // s = a² + b² as a polynomial, then its square root about h² = s0.
-        let s1 = 2.0 * (self.c0 * self.c1 + other.c0 * other.c1);
-        let s2 = self.c1 * self.c1
-            + other.c1 * other.c1
-            + 2.0 * (self.c0 * self.c2 + other.c0 * other.c2);
-        let c1 = s1 / (2.0 * h);
-        Self::new(h, c1, (s2 - c1 * c1) / (2.0 * h))
+        // The square root of a² + b² about h², with (a, b) divided by h
+        // before anything is multiplied, as for `Dual`. `a'² + b'² − c1²` is
+        // the square of the part of (a', b') across (a, b), and is computed
+        // directly instead of as a difference.
+        let (ua, ub) = (self.c0 / h, other.c0 / h);
+        let c1 = ua * self.c1 + ub * other.c1;
+        let w = ua * other.c1 - ub * self.c1;
+        Self::new(h, c1, 0.5 * w * (w / h) + ua * self.c2 + ub * other.c2)
     }
     #[inline]
     fn powi(self, n: i32) -> Self {
@@ -1083,6 +1098,62 @@ mod tests {
         assert_eq!((h.c0, h.c1, h.c2), (0.0, 0.0, 0.0));
         let a = t.atan2(t);
         assert_eq!((a.c1, a.c2), (0.0, 0.0));
+    }
+
+    #[test]
+    fn atan2_and_hypot_keep_their_derivatives_for_tiny_arguments() {
+        // 0.1.0 divided by x² + y², which underflows to zero below about
+        // 1e-154, and then reported a derivative of zero (#16). `hypot`
+        // multiplied each value by its derivative first, which underflows
+        // when both are tiny.
+        let close = |a: f64, b: f64| (a - b).abs() <= 4.0 * f64::EPSILON * b.abs();
+
+        // ∂/∂y atan2(y, x) = x / (x² + y²) = 5e169 at x = y = 1e-170.
+        let g = Grad::<2>::variable(1e-170, 0).atan2(Grad::variable(1e-170, 1));
+        assert!(close(g.d[0], 5e169) && close(g.d[1], -5e169), "{:?}", g.d);
+
+        // atan2(1e-170·(1 + s), 1e-170) = atan(1 + s): slope 1/2, and
+        // second derivative -1/2 at s = 0.
+        let y = Dual::new(1e-170, 1e-170);
+        let d = y.atan2(Dual::constant(1e-170));
+        assert!(close(d.eps, 0.5), "{}", d.eps);
+        let x = Dual::new(Dual::constant(1e-170), Dual::constant(0.0));
+        let y = Dual::new(Dual::new(1e-170, 1e-170), Dual::constant(1e-170));
+        let h: HyperDual = y.atan2(x);
+        assert!(close(h.eps.val, 0.5) && close(h.val.eps, 0.5), "{h:?}");
+        assert!(close(h.eps.eps, -0.5), "{}", h.eps.eps);
+
+        let t = Taylor2::new(1e-170, 1e-170, 0.0).atan2(Taylor2::constant(1e-170));
+        assert!(close(t.c1, 0.5) && close(t.c2, -0.25), "{t:?}");
+
+        // hypot(1e-170·(1 + s), 1e-170) = 1e-170·√((1 + s)² + 1): slope
+        // 1e-170/√2 and second derivative 1e-170/(2√2) at s = 0.
+        let h = Dual::new(1e-170, 1e-170).hypot(Dual::constant(1e-170));
+        assert!(close(h.eps, 1e-170 / core::f64::consts::SQRT_2), "{h:?}");
+        let t = Taylor2::new(1e-170, 1e-170, 0.0).hypot(Taylor2::constant(1e-170));
+        assert!(
+            close(t.c1, 1e-170 / core::f64::consts::SQRT_2)
+                && close(t.c2, 1e-170 / (4.0 * core::f64::consts::SQRT_2)),
+            "{t:?}"
+        );
+
+        // Nothing changes at ordinary sizes.
+        let g = Grad::<2>::variable(0.3, 0).atan2(Grad::variable(-0.4, 1));
+        let r2 = 0.3_f64 * 0.3 + 0.4 * 0.4;
+        assert!(
+            close(g.d[0], -0.4 / r2) && close(g.d[1], -0.3 / r2),
+            "{:?}",
+            g.d
+        );
+        let t = Taylor2::new(0.3, 0.7, -0.2).hypot(Taylor2::new(-0.4, 0.1, 0.5));
+        // √(a² + b²) with a = 0.3 + 0.7s − 0.2s², b = −0.4 + 0.1s + 0.5s².
+        let (c1, c2) = ((0.3 * 0.7 - 0.4 * 0.1) / 0.5, 0.0);
+        let w = (0.3 * 0.1 + 0.4 * 0.7) / 0.5;
+        let c2 = c2 + 0.5 * w * w / 0.5 + (0.3 * -0.2 - 0.4 * 0.5) / 0.5;
+        assert!(
+            close(t.c1, c1) && (t.c2 - c2).abs() <= 1e-15,
+            "{t:?} vs {c1}, {c2}"
+        );
     }
 
     #[test]

@@ -62,6 +62,26 @@ const SHRINK_LIMIT: f64 = 5.0;
 /// …and grow tenfold.
 const GROW_LIMIT: f64 = 0.1;
 
+/// Attempts one call may make before it gives up with
+/// [`SimError::StepSizeUnderflow`]. A rejection divides the trial step by
+/// between 1.1 and 5, depending on its error, and a step at the floor ends
+/// the call, so an ordinary step needs a handful; even a fall from
+/// `f64::MAX` to the floor by fivefold cuts takes fewer than 470. The bound
+/// is there so that no input, however its error estimates behave, can keep
+/// the loop turning (#4).
+const MAX_ATTEMPTS: u32 = 1000;
+
+/// One trial step: where it ends, how wrong it may be, and the increments it
+/// added to the start knot as they were computed, before being added. The
+/// segment is built from the increments, which carry the rounding of the
+/// step rather than of the positions.
+struct Trial<const N: usize> {
+    end: State<N>,
+    err: f64,
+    inc_q: [f64; N],
+    inc_dq: [f64; N],
+}
+
 /// One accepted step, retrying rejected ones.
 pub(super) fn step<L: Lagrangian<N>, const N: usize>(
     s: &mut Stepper<L, N>,
@@ -70,6 +90,11 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
     let cfg = s.config;
     let start = s.state;
     let t = start.t;
+    // The longest step the arithmetic can take. With the default unlimited
+    // `max_step` a step that grows tenfold with every acceptance otherwise
+    // reaches infinity after a few hundred steps at rest, and no rejection
+    // can shrink infinity (#4).
+    let max_step = cfg.max_step.min(f64::MAX);
 
     if s.h == 0.0 {
         s.h = match cfg.initial_step {
@@ -82,28 +107,45 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
     let floor = cfg
         .min_step
         .max(16.0 * f64::EPSILON * math::abs(t).max(1.0));
+    let remainder = t_max.map(|tm| tm - t);
 
     let mut h = s.h;
     let mut after_rejection = false;
     let mut failure: Option<SimError> = None;
 
-    loop {
-        let mut h_try = h.min(cfg.max_step);
-        // Land on t_max when it is within a hundredth of a step, rather
-        // than leave a sliver for the next call.
-        let lands = matches!(t_max, Some(tm) if t + 1.01 * h_try >= tm);
-        if let (true, Some(tm)) = (lands, t_max) {
-            h_try = tm - t;
+    for _ in 0..MAX_ATTEMPTS {
+        let mut h_try = h.min(max_step);
+        // Land on t_max when it is within a hundredth of a step, rather than
+        // leave a sliver for the next call. Lengths are compared, not times:
+        // `t + 1.01·h >= t_max` rounds, and a few ulps short of t_max a step
+        // shrunk after a rejection rounded back up and landed again, for
+        // ever (#4). A landing step may be shorter than the floor, so that a
+        // target just ahead can still be reached; once rejected, the shorter
+        // steps that follow cannot land.
+        let lands = matches!(remainder, Some(rem) if 1.01 * h_try >= rem);
+        if let (true, Some(rem)) = (lands, remainder) {
+            h_try = rem;
         } else if h_try.partial_cmp(&floor) != Some(core::cmp::Ordering::Greater) {
             return Err(failure.unwrap_or(SimError::StepSizeUnderflow { t }));
         }
 
         match attempt(s, &start, h_try) {
-            Ok((mut end, err)) if err <= 1.0 => {
+            Ok(trial) if trial.err <= 1.0 => {
+                let mut end = trial.end;
                 if let (true, Some(tm)) = (lands, t_max) {
                     end.t = tm;
                 }
-                let scaled = math::powf(err.max(1e-10), EXPO) / math::powf(s.err_prev, BETA);
+                let segment = Segment::from_step(&start, &end, &trial.inc_q, &trial.inc_dq);
+                if segment.defect().is_some() {
+                    // Accurate at its ends, but a polynomial that overflows
+                    // in between: as unusable as a failed evaluation, and as
+                    // likely to be cured by a shorter step.
+                    failure = Some(SimError::NonFiniteState { t });
+                    h = h_try / SHRINK_LIMIT;
+                    after_rejection = true;
+                    continue;
+                }
+                let scaled = math::powf(trial.err.max(1e-10), EXPO) / math::powf(s.err_prev, BETA);
                 let factor = (scaled / SAFETY).clamp(GROW_LIMIT, SHRINK_LIMIT);
                 let mut h_next = h_try / factor;
                 if after_rejection {
@@ -111,17 +153,18 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
                 }
                 // A step shortened to land says nothing about the step the
                 // dynamics would have accepted.
-                s.h = if lands && h_try < h {
+                let next = if lands && h_try < h {
                     h_next.max(h)
                 } else {
                     h_next
                 };
-                s.err_prev = err.max(1e-4);
+                s.h = next.min(max_step);
+                s.err_prev = trial.err.max(1e-4);
                 s.state = end;
-                return Ok(Segment::from_knots(&start, &end));
+                return Ok(segment);
             }
-            Ok((_, err)) if err.is_finite() => {
-                let factor = (math::powf(err, EXPO) / SAFETY).min(SHRINK_LIMIT);
+            Ok(trial) if trial.err.is_finite() => {
+                let factor = (math::powf(trial.err, EXPO) / SAFETY).min(SHRINK_LIMIT);
                 h = h_try / factor;
             }
             Ok(_) => {
@@ -136,19 +179,18 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
                 h = h_try / SHRINK_LIMIT;
             }
         }
-        // Every branch above shrinks the step, so the loop ends: either a
-        // step is accepted or `h` falls to the floor.
         after_rejection = true;
     }
+    Err(failure.unwrap_or(SimError::StepSizeUnderflow { t }))
 }
 
-/// One trial step of size `h` from `start`: the end state, and the scaled
-/// error estimate (accept at or below one).
+/// One trial step of size `h` from `start`: the end state, the scaled error
+/// estimate (accept at or below one), and the increments.
 fn attempt<L: Lagrangian<N>, const N: usize>(
     s: &Stepper<L, N>,
     start: &State<N>,
     h: f64,
-) -> Result<(State<N>, f64), SimError> {
+) -> Result<Trial<N>, SimError> {
     // The derivative of (q, q̇) at each stage is (kq, kv).
     let mut kq = [[0.0; N]; 7];
     let mut kv = [[0.0; N]; 7];
@@ -157,6 +199,8 @@ fn attempt<L: Lagrangian<N>, const N: usize>(
 
     let mut q = start.q;
     let mut dq = start.dq;
+    let mut inc_q = [0.0; N];
+    let mut inc_dq = [0.0; N];
     for stage in 1..7 {
         for i in 0..N {
             let mut sq = 0.0;
@@ -165,15 +209,18 @@ fn attempt<L: Lagrangian<N>, const N: usize>(
                 sq += A[stage][j] * kq[j][i];
                 sv += A[stage][j] * kv[j][i];
             }
-            q[i] = start.q[i] + h * sq;
-            dq[i] = start.dq[i] + h * sv;
+            inc_q[i] = h * sq;
+            inc_dq[i] = h * sv;
+            q[i] = start.q[i] + inc_q[i];
+            dq[i] = start.dq[i] + inc_dq[i];
         }
         kq[stage] = dq;
         kv[stage] = accelerations(&s.sys, q, dq, start.t + C[stage] * h)?;
     }
 
-    // After the seventh stage (q, dq) is the fifth-order solution and
-    // kv[6] its acceleration: the next step's first stage, for free.
+    // After the seventh stage (q, dq) is the fifth-order solution, its
+    // increments are the last ones computed, and kv[6] is its acceleration:
+    // the next step's first stage, for free.
     let mut sum = 0.0;
     for i in 0..N {
         let mut eq = 0.0;
@@ -203,7 +250,12 @@ fn attempt<L: Lagrangian<N>, const N: usize>(
     if !end.is_finite() {
         return Err(SimError::NonFiniteState { t: start.t });
     }
-    Ok((end, err))
+    Ok(Trial {
+        end,
+        err,
+        inc_q,
+        inc_dq,
+    })
 }
 
 /// A first step from the size of the state and of its derivatives, after
@@ -229,10 +281,14 @@ fn initial_step<L: Lagrangian<N>, const N: usize>(s: &Stepper<L, N>, t_max: Opti
         d1 += (st.dq[i] / sq) * (st.dq[i] / sq) + (st.ddq[i] / sv) * (st.ddq[i] / sv);
     }
     let (d0, d1) = (rms(d0), rms(d1));
-    let h0 = if d0 < 1e-5 || d1 < 1e-5 {
+    // With extreme tolerances the squares above overflow and the ratio is
+    // inf / inf. `NaN.min(cap)` is `cap`, which is infinite by default, and
+    // an infinite first step is the hang of #4.
+    let ratio = 0.01 * d0 / d1;
+    let h0 = if d0 < 1e-5 || d1 < 1e-5 || !ratio.is_finite() {
         1e-6
     } else {
-        0.01 * d0 / d1
+        ratio
     }
     .min(cap);
 

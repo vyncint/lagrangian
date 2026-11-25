@@ -206,7 +206,7 @@ M(q, q̇, t) · q̈ = ∇_q L + Q − C        M_ij = ∂²L/∂q̇_i∂q̇_j
 
 - **Derivatives come from dual numbers**, not symbols and not finite differences. Your function is called with a number type that carries derivatives through every `+`, `*`, `sin` and `powi`. The types live on the stack and are `Copy`.
 - **The whole vector `C` is one directional derivative** of the momentum `∇_q̇ L` along `(q̇, 0, 1)`, so it costs one evaluation instead of one per entry. All terms together take `N + 2` evaluations. Each is `O(N)` wide, so the total grows as `N²`: a constant-factor saving, not a different order.
-- **`M` is solved with pivoted elimination**, never Cholesky. A mass matrix need not be positive definite: for a geodesic it is the metric, and a spacetime metric has a negative eigenvalue.
+- **`M` is solved with pivoted elimination**, never Cholesky. A mass matrix need not be positive definite: for a geodesic it is the metric, and a spacetime metric has a negative eigenvalue. Rows and columns are first scaled by powers of two, so a matrix whose entries span many orders of magnitude, like that metric just outside the horizon, is solved rather than called singular.
 - **Energy is the Jacobi integral `p·q̇ − L`**, which is what is conserved in a rotating frame or a magnetic field. `½q̇ᵀMq̇ + V` is wrong for both.
 - **Each step is stored as a quintic** matching position, velocity and acceleration at both ends, which is what makes the trajectory twice continuously differentiable.
 - **The variational integrator** discretizes the action rather than the equations, which makes it symplectic even when the mass matrix depends on `q`. A coordinate the Lagrangian does not depend on keeps its momentum to the last bit.

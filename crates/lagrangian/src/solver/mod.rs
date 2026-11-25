@@ -9,6 +9,10 @@ use crate::segment::{Segment, State};
 mod dopri5;
 mod variational;
 
+/// The PI controller's memory of the previous step's error before there is
+/// one: a new stepper, and a stepper given a new state, start from it.
+const ERR_PREV_FRESH: f64 = 1e-4;
+
 /// Which integrator advances the state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
@@ -64,6 +68,11 @@ pub struct SimConfig {
     /// `Trajectory::extend` may take before it stops with
     /// [`SimError::MaxStepsExceeded`]. A [`Stepper`] used directly has no
     /// such budget: it is the caller's loop. Default `1_000_000`.
+    ///
+    /// It is also the memory budget of those calls: each step keeps a
+    /// [`Segment`] of `8·(6N + 2)` bytes, so the default allows 107 MiB at
+    /// `N = 2` and 748 MiB at `N = 16`. Lower it when the span or the system
+    /// comes from someone else.
     pub max_steps: usize,
 }
 
@@ -254,7 +263,7 @@ impl<L: Lagrangian<N>, const N: usize> Stepper<L, N> {
             p: [0.0; N],
             fresh: false,
             h: 0.0,
-            err_prev: 1e-4,
+            err_prev: ERR_PREV_FRESH,
             anchor_t: t0,
             anchor_steps: 0.0,
         };
@@ -365,9 +374,14 @@ impl<L: Lagrangian<N>, const N: usize> Stepper<L, N> {
             (self.state, self.p, self.fresh) = previous;
             return Err(e);
         }
-        // Fixed-step solvers count their steps from here on.
+        // Fixed-step solvers count their steps from here on, and the step
+        // size and error history the old state earned say nothing about the
+        // new one: after a long rest the step can be astronomically large.
+        // The next step is the one a new stepper would take from here.
         self.anchor_t = self.state.t;
         self.anchor_steps = 0.0;
+        self.h = 0.0;
+        self.err_prev = ERR_PREV_FRESH;
         Ok(())
     }
 

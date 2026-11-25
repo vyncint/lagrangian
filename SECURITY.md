@@ -39,14 +39,36 @@ What the project does continuously, enforced by required CI on every change:
   identity rule only: its messages are checked like any other
   (CONTRIBUTING.md, AI tooling policy).
 
-Resource-exhaustion notes for the paranoid: every loop the caller's numbers
-can reach is bounded. An integration stops at `max_steps` and reports
-`MaxStepsExceeded`; a step size that collapses reports `StepSizeUnderflow`
-instead of spinning; each Newton iteration and each root-finding call has a
-fixed iteration cap; a state that becomes `NaN` or infinite is reported as
-`NonFiniteState` rather than propagated. The engine, the `Stepper` and a
-`Segment<N>` allocate nothing. A `Trajectory<N>` grows by one segment per
-accepted step and therefore by at most `max_steps` segments per call.
+Resource exhaustion, and what bounds it. Each figure is in the rustdoc of
+the item named, and each bound has a test:
+
+- **Steps per call.** `simulate` and `Trajectory::extend` take at most
+  `SimConfig::max_steps` steps (default 1,000,000) and then report
+  `MaxStepsExceeded`. An end time that is not finite is refused with
+  `InvalidConfig` before any step is taken.
+- **Memory per call.** Those calls keep one `Segment<N>` per step, of
+  `8·(6N + 2)` bytes: at most 107 MiB at `N = 2` and 748 MiB at `N = 16`
+  with the default budget. Lower `max_steps` when the span or the system
+  comes from someone else. The engine, the `Stepper` and a `Segment<N>`
+  allocate nothing.
+- **Work per step.** One `Stepper::step` makes at most 1000 attempts, and
+  the step size never exceeds `f64::MAX`; a step size that collapses reports
+  `StepSizeUnderflow` instead of spinning. Each Newton iteration and each
+  root-finding call has a fixed iteration cap.
+- **Work per query.** `Trajectory::crossings_with` looks at no more than
+  2¹⁶ points inside each step, and `Trajectory::energy_drift` takes no more
+  than 2²⁰ samples, whatever count is asked for.
+- **Non-finite values.** A state that becomes `NaN` or infinite is reported
+  as `NonFiniteState` rather than propagated, and no step returns a segment
+  that overflows between its ends.
+- **Data read with the `serde` feature.** A file that no solver could have
+  written is refused: times or an initial state that are not finite, a
+  duration that is not positive and finite, a polynomial that overflows
+  between the ends of its segment, or segments that do not join. How much
+  input to read at all is the deserializer's choice, not this crate's.
+
+A `Stepper` driven by a loop of the caller's has no step budget: the loop
+is the caller's, and so is its bound.
 
 What is *not* bounded is the caller's own code: a `Lagrangian` implementation
 that loops forever or panics does so inside the caller's process, as any

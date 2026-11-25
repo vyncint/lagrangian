@@ -9,6 +9,12 @@ use crate::roots;
 use crate::segment::{Segment, State};
 use crate::solver::{SimConfig, Stepper};
 
+/// The most samples [`Trajectory::energy_drift`] takes.
+const MAX_DRIFT_SAMPLES: usize = 1 << 20;
+
+/// The most interior points [`Trajectory::crossings_with`] looks at per step.
+const MAX_INTERIOR_SAMPLES: usize = 1 << 16;
+
 /// Which way an indicator must pass through zero to count as a crossing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -89,11 +95,21 @@ pub struct Trajectory<const N: usize> {
 /// This is a loop over [`Stepper::step_bounded`] that collects the segments;
 /// nothing here is a separate code path.
 ///
+/// # Memory
+///
+/// One [`Segment`] is kept per accepted step, so a call holds at most
+/// [`SimConfig::max_steps`] `× size_of::<Segment<N>>()` bytes, `8·(6N + 2)`
+/// per segment: 107 MiB for a double pendulum with the default budget of a
+/// million steps, before it gives up with
+/// [`MaxStepsExceeded`](SimError::MaxStepsExceeded). Lower the budget when
+/// the span or the system comes from someone else.
+///
 /// # Errors
 ///
-/// [`SimError::InvalidConfig`] if the span runs backward,
-/// [`SimError::MaxStepsExceeded`] if it needs more than
-/// [`SimConfig::max_steps`] steps, and anything [`Stepper::step`] reports.
+/// [`SimError::InvalidConfig`] if either end of the span is not finite or
+/// the span runs backward, [`SimError::MaxStepsExceeded`] if it needs more
+/// than [`SimConfig::max_steps`] steps, and anything [`Stepper::step`]
+/// reports.
 pub fn simulate<L: Lagrangian<N> + ?Sized, const N: usize>(
     sys: &L,
     t_span: (f64, f64),
@@ -102,6 +118,14 @@ pub fn simulate<L: Lagrangian<N> + ?Sized, const N: usize>(
     config: &SimConfig,
 ) -> Result<Trajectory<N>, SimError> {
     let (t0, t1) = t_span;
+    // An infinite span can only end in `MaxStepsExceeded`, after a million
+    // steps and their segments, or, at rest, in a step that never returned
+    // (#4, #5).
+    if !(t0.is_finite() && t1.is_finite()) {
+        return Err(SimError::InvalidConfig {
+            reason: "the time span must be finite",
+        });
+    }
     if t1
         .partial_cmp(&t0)
         .is_none_or(|o| o == core::cmp::Ordering::Less)
@@ -130,16 +154,15 @@ impl<const N: usize> Trajectory<N> {
     /// # Errors
     ///
     /// [`SimError::InvalidConfig`] if the segment does not start at the time
-    /// the trajectory ends, or does not run forward.
+    /// the trajectory ends, does not run forward for a finite time, or has a
+    /// polynomial that overflows between its ends.
     pub fn push(&mut self, segment: Segment<N>) -> Result<(), SimError> {
+        if let Some(reason) = segment.defect() {
+            return Err(SimError::InvalidConfig { reason });
+        }
         if segment.t0 != self.t_end() {
             return Err(SimError::InvalidConfig {
                 reason: "a segment must start where the trajectory ends",
-            });
-        }
-        if segment.t1.partial_cmp(&segment.t0) != Some(core::cmp::Ordering::Greater) {
-            return Err(SimError::InvalidConfig {
-                reason: "a segment must run forward in time",
             });
         }
         self.segments.push(segment);
@@ -156,15 +179,21 @@ impl<const N: usize> Trajectory<N> {
     ///
     /// # Errors
     ///
-    /// [`SimError::InvalidConfig`] if the stepper is not at the end of this
-    /// trajectory, [`SimError::MaxStepsExceeded`] if this call needs more
-    /// than [`SimConfig::max_steps`] steps, and anything [`Stepper::step`]
-    /// reports. Segments appended before an error stay.
+    /// [`SimError::InvalidConfig`] if `t_until` is not finite or the stepper
+    /// is not at the end of this trajectory, [`SimError::MaxStepsExceeded`]
+    /// if this call needs more than [`SimConfig::max_steps`] steps, and
+    /// anything [`Stepper::step`] reports. Segments appended before an error
+    /// stay.
     pub fn extend<L: Lagrangian<N>>(
         &mut self,
         stepper: &mut Stepper<L, N>,
         t_until: f64,
     ) -> Result<(), SimError> {
+        if !t_until.is_finite() {
+            return Err(SimError::InvalidConfig {
+                reason: "t_until must be finite",
+            });
+        }
         if stepper.state().t != self.t_end() {
             return Err(SimError::InvalidConfig {
                 reason: "the stepper must be at the end of the trajectory",
@@ -210,9 +239,16 @@ impl<const N: usize> Trajectory<N> {
         &self.segments
     }
 
-    /// The state at the start.
+    /// The state at the start: where the first segment starts, or the state
+    /// the trajectory was created with if it has no segment yet.
+    ///
+    /// The two differ only if the first step began from another state than
+    /// the trajectory was created with: a stepper given a new state with
+    /// [`Stepper::set_state`] before its first step, or data read from
+    /// elsewhere. Every other knot reports the state the step after it began
+    /// from, and so does the first.
     pub fn start(&self) -> State<N> {
-        self.initial
+        self.segments.first().map_or(self.initial, Segment::start)
     }
 
     /// The state at the end.
@@ -225,7 +261,7 @@ impl<const N: usize> Trajectory<N> {
     pub fn knots(&self) -> impl Iterator<Item = State<N>> + '_ {
         // A shared knot is taken from the segment that starts there, which
         // reproduces it exactly.
-        core::iter::once(self.initial)
+        core::iter::once(self.start())
             .chain(self.segments.iter().skip(1).map(Segment::start))
             .chain(self.segments.last().map(Segment::end))
     }
@@ -348,7 +384,10 @@ impl<const N: usize> Trajectory<N> {
         mechanics::energy(sys, s.q, s.dq, s.t)
     }
 
-    /// Energy conservation at `num_samples` evenly spaced times.
+    /// Energy conservation at `num_samples` evenly spaced times, at least 2
+    /// and at most 1 048 576 (2²⁰): a larger count is clamped, so that no
+    /// argument can keep the call running. Each sample costs one energy
+    /// evaluation.
     ///
     /// Evenly spaced times fall **between** the ends of steps, where the
     /// error is that of the interpolating polynomial and is larger than the
@@ -360,7 +399,7 @@ impl<const N: usize> Trajectory<N> {
         sys: &L,
         num_samples: usize,
     ) -> EnergyReport {
-        let n = num_samples.max(2);
+        let n = num_samples.clamp(2, MAX_DRIFT_SAMPLES);
         let (t0, duration) = (self.t_start(), self.duration());
         energy_report(
             sys,
@@ -458,15 +497,19 @@ impl<const N: usize> Trajectory<N> {
     /// [`crossings`](Trajectory::crossings), looking for sign changes at
     /// `interior_samples` evenly spaced points inside each step as well as
     /// at its ends.
+    ///
+    /// `interior_samples` is clamped to 65 536 (2¹⁶), far finer than any
+    /// quintic needs, so that no argument can keep the call running. The
+    /// indicator is evaluated about `interior_samples + 1` times per step.
     pub fn crossings_with(
         &self,
         indicator: impl Fn(&State<N>) -> f64,
         direction: CrossingDirection,
         interior_samples: usize,
     ) -> Vec<State<N>> {
-        // Saturating: `usize::MAX` interior samples is a strange request, but
-        // it must not be an arithmetic overflow.
-        let pieces = interior_samples.saturating_add(1);
+        // 0.1.0 computed `interior_samples.saturating_add(1)` here, so
+        // `usize::MAX` asked for 2⁶⁴ evaluations per step and never returned.
+        let pieces = interior_samples.min(MAX_INTERIOR_SAMPLES) + 1;
         let mut found = Vec::new();
         for (index, seg) in self.segments.iter().enumerate() {
             // The value at a shared knot is taken from the segment that

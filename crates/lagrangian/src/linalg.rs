@@ -5,14 +5,76 @@
 //! the metric, and a spacetime metric has one negative eigenvalue. So there
 //! is no Cholesky here. Everything is Gaussian elimination with partial
 //! pivoting, which does not care about the sign of a pivot.
+//!
+//! Before elimination every row, and then every column, is multiplied by
+//! the power of two that brings its largest entry into `[1, 2)`. That adds
+//! no rounding of its own, and it lets a pivot be judged against a fixed
+//! fraction of one. A matrix whose rows or columns differ in scale by many
+//! orders of magnitude, such as a metric near a horizon or a system that
+//! mixes kilograms with micrograms, is solved rather than mistaken for a
+//! singular one.
 
 use crate::math;
 
-/// A pivot at or below this fraction of the matrix's largest entry is
-/// treated as zero.
-const SINGULAR_RATIO: f64 = 64.0 * f64::EPSILON;
+/// A pivot at or below this size is treated as zero. In the equilibrated
+/// matrix every row and every column has its largest entry in `[1, 2)`.
+const SINGULAR_PIVOT: f64 = 64.0 * f64::EPSILON;
 
-/// An `N × N` matrix factored as `PA = LU` with partial pivoting.
+/// Whether a pivot is distinguishable from zero. Written so that a `NaN`
+/// fails.
+#[inline]
+fn is_pivot(pivot: f64) -> bool {
+    math::abs(pivot) > SINGULAR_PIVOT
+}
+
+/// The power of two at or below `x`, or `None` if `x` is zero, subnormal or
+/// not finite. Clearing the significand leaves the exponent, exactly.
+#[inline]
+fn power_of_two_below(x: f64) -> Option<f64> {
+    if !(f64::MIN_POSITIVE..=f64::MAX).contains(&x) {
+        return None;
+    }
+    Some(f64::from_bits(x.to_bits() & 0x7ff0_0000_0000_0000))
+}
+
+/// `a` with every row and then every column multiplied by a power of two,
+/// and the factors: `R·a·C`, with `R = diag(rows)` and `C = diag(cols)`.
+///
+/// `None` if an entry is not finite, or a row or column has no entry in the
+/// normal range: then the matrix is singular to working precision. 0.1.0
+/// judged every pivot against the largest entry of the whole matrix instead,
+/// and refused `diag(1e300, 1e-300)` (#16).
+#[allow(clippy::type_complexity)]
+fn equilibrate<const N: usize>(a: &[[f64; N]; N]) -> Option<([[f64; N]; N], [f64; N], [f64; N])> {
+    let mut m = *a;
+    let mut rows = [1.0; N];
+    for (row, factor) in m.iter_mut().zip(rows.iter_mut()) {
+        let mut largest = 0.0_f64;
+        for &x in row.iter() {
+            if !x.is_finite() {
+                return None;
+            }
+            largest = largest.max(math::abs(x));
+        }
+        *factor = 1.0 / power_of_two_below(largest)?;
+        for x in row.iter_mut() {
+            *x *= *factor;
+        }
+    }
+    let mut cols = [1.0; N];
+    for (j, factor) in cols.iter_mut().enumerate() {
+        let largest = m.iter().fold(0.0_f64, |l, row| l.max(math::abs(row[j])));
+        *factor = 1.0 / power_of_two_below(largest)?;
+        for row in m.iter_mut() {
+            row[j] *= *factor;
+        }
+    }
+    Some((m, rows, cols))
+}
+
+/// An `N × N` matrix factored as `P·R·A·C = L·U`: `R` and `C` are the
+/// diagonal powers of two that equilibrate it, and `P` the row exchanges of
+/// partial pivoting.
 ///
 /// Factor once, then [`solve`](Lu::solve) for as many right-hand sides as
 /// needed.
@@ -22,34 +84,31 @@ pub struct Lu<const N: usize> {
     lu: [[f64; N]; N],
     /// Row `i` of the factorization is row `perm[i]` of the original.
     perm: [usize; N],
+    /// The diagonals of `R` and `C`.
+    rows: [f64; N],
+    cols: [f64; N],
 }
 
 impl<const N: usize> Lu<N> {
     /// Factors `a`, or returns `None` if it is singular to working precision
     /// or contains a value that is not finite.
     pub fn factor(a: &[[f64; N]; N]) -> Option<Self> {
-        let tol = singular_tolerance(a)?;
-        let mut lu = *a;
+        let (mut lu, rows, cols) = equilibrate(a)?;
         let mut perm: [usize; N] = core::array::from_fn(|i| i);
 
         for k in 0..N {
-            // The largest entry in column k, at or below the diagonal.
             let mut pivot_row = k;
-            let mut pivot_abs = math::abs(lu[k][k]);
-            for (r, row) in lu.iter().enumerate().skip(k + 1) {
-                let candidate = math::abs(row[k]);
-                if candidate > pivot_abs {
-                    pivot_abs = candidate;
+            for r in (k + 1)..N {
+                if math::abs(lu[r][k]) > math::abs(lu[pivot_row][k]) {
                     pivot_row = r;
                 }
-            }
-            // Written so that a NaN pivot fails the test.
-            if pivot_abs.partial_cmp(&tol) != Some(core::cmp::Ordering::Greater) {
-                return None;
             }
             if pivot_row != k {
                 lu.swap(k, pivot_row);
                 perm.swap(k, pivot_row);
+            }
+            if !is_pivot(lu[k][k]) {
+                return None;
             }
             let pivot = lu[k][k];
             for r in (k + 1)..N {
@@ -60,24 +119,33 @@ impl<const N: usize> Lu<N> {
                 }
             }
         }
-        Some(Self { lu, perm })
+        Some(Self {
+            lu,
+            perm,
+            rows,
+            cols,
+        })
     }
 
     /// Solves `A x = b`.
     pub fn solve(&self, b: &[f64; N]) -> [f64; N] {
-        let mut x: [f64; N] = core::array::from_fn(|i| b[self.perm[i]]);
-        // L y = P b
+        let mut x: [f64; N] = core::array::from_fn(|i| b[self.perm[i]] * self.rows[self.perm[i]]);
+        // L y = P R b
         for i in 0..N {
             for j in 0..i {
                 x[i] -= self.lu[i][j] * x[j];
             }
         }
-        // U x = y
+        // U z = y
         for i in (0..N).rev() {
             for j in (i + 1)..N {
                 x[i] -= self.lu[i][j] * x[j];
             }
             x[i] /= self.lu[i][i];
+        }
+        // x = C z
+        for (xi, c) in x.iter_mut().zip(self.cols) {
+            *xi *= c;
         }
         x
     }
@@ -87,82 +155,48 @@ impl<const N: usize> Lu<N> {
 /// precision or contains a value that is not finite.
 ///
 /// `N = 1, 2, 3` take fixed-size paths with no permutation bookkeeping;
-/// every other size goes through [`Lu`]. All of them pivot, so an indefinite
-/// matrix is as welcome as a positive definite one.
+/// every other size goes through [`Lu`]. All of them equilibrate and pivot,
+/// so an indefinite matrix is as welcome as a positive definite one, and a
+/// badly scaled one as a well scaled one.
 pub fn solve<const N: usize>(a: &[[f64; N]; N], b: &[f64; N]) -> Option<[f64; N]> {
+    if N > 3 {
+        return Lu::factor(a).map(|lu| lu.solve(b));
+    }
+    let (m, rows, cols) = equilibrate(a)?;
+    let rb: [f64; N] = core::array::from_fn(|i| b[i] * rows[i]);
+    let mut z = [0.0; N];
     match N {
-        0 => Some([0.0; N]),
-        1 => {
-            let tol = singular_tolerance(a)?;
-            if !is_above(a[0][0], tol) {
-                return None;
-            }
-            let mut x = [0.0; N];
-            x[0] = b[0] / a[0][0];
-            Some(x)
-        }
-        2 => {
-            let tol = singular_tolerance(a)?;
-            let s = solve2([[a[0][0], a[0][1]], [a[1][0], a[1][1]]], [b[0], b[1]], tol)?;
-            let mut x = [0.0; N];
-            x[..2].copy_from_slice(&s);
-            Some(x)
-        }
-        3 => {
-            let tol = singular_tolerance(a)?;
-            let m = [
-                [a[0][0], a[0][1], a[0][2]],
-                [a[1][0], a[1][1], a[1][2]],
-                [a[2][0], a[2][1], a[2][2]],
-            ];
-            let s = solve3(m, [b[0], b[1], b[2]], tol)?;
-            let mut x = [0.0; N];
-            x[..3].copy_from_slice(&s);
-            Some(x)
-        }
-        _ => Lu::factor(a).map(|lu| lu.solve(b)),
+        0 => {}
+        1 => z[0] = rb[0] / m[0][0],
+        2 => z[..2].copy_from_slice(&solve2(
+            [[m[0][0], m[0][1]], [m[1][0], m[1][1]]],
+            [rb[0], rb[1]],
+        )?),
+        _ => z[..3].copy_from_slice(&solve3(
+            [
+                [m[0][0], m[0][1], m[0][2]],
+                [m[1][0], m[1][1], m[1][2]],
+                [m[2][0], m[2][1], m[2][2]],
+            ],
+            [rb[0], rb[1], rb[2]],
+        )?),
     }
+    Some(core::array::from_fn(|i| z[i] * cols[i]))
 }
 
-/// `SINGULAR_RATIO` times the largest magnitude in `a`; `None` if any entry
-/// is not finite or all of them are zero.
-fn singular_tolerance<const N: usize>(a: &[[f64; N]; N]) -> Option<f64> {
-    let mut largest = 0.0_f64;
-    for row in a {
-        for &x in row {
-            if !x.is_finite() {
-                return None;
-            }
-            let m = math::abs(x);
-            if m > largest {
-                largest = m;
-            }
-        }
-    }
-    if N > 0 && largest == 0.0 {
-        return None;
-    }
-    Some(SINGULAR_RATIO * largest)
-}
-
-#[inline]
-fn is_above(pivot: f64, tol: f64) -> bool {
-    math::abs(pivot) > tol
-}
-
-fn solve2(a: [[f64; 2]; 2], b: [f64; 2], tol: f64) -> Option<[f64; 2]> {
-    // Pivot on the larger entry of the first column.
+/// Partial pivoting on an equilibrated 2 × 2 matrix.
+fn solve2(a: [[f64; 2]; 2], b: [f64; 2]) -> Option<[f64; 2]> {
     let (r0, r1, b0, b1) = if math::abs(a[0][0]) >= math::abs(a[1][0]) {
         (a[0], a[1], b[0], b[1])
     } else {
         (a[1], a[0], b[1], b[0])
     };
-    if !is_above(r0[0], tol) {
+    if !is_pivot(r0[0]) {
         return None;
     }
     let f = r1[0] / r0[0];
     let u11 = r1[1] - f * r0[1];
-    if !is_above(u11, tol) {
+    if !is_pivot(u11) {
         return None;
     }
     let x1 = (b1 - f * b0) / u11;
@@ -170,7 +204,8 @@ fn solve2(a: [[f64; 2]; 2], b: [f64; 2], tol: f64) -> Option<[f64; 2]> {
     Some([x0, x1])
 }
 
-fn solve3(mut a: [[f64; 3]; 3], mut b: [f64; 3], tol: f64) -> Option<[f64; 3]> {
+/// Partial pivoting on an equilibrated 3 × 3 matrix.
+fn solve3(mut a: [[f64; 3]; 3], mut b: [f64; 3]) -> Option<[f64; 3]> {
     // Column 0.
     let mut p = 0;
     if math::abs(a[1][0]) > math::abs(a[p][0]) {
@@ -181,7 +216,7 @@ fn solve3(mut a: [[f64; 3]; 3], mut b: [f64; 3], tol: f64) -> Option<[f64; 3]> {
     }
     a.swap(0, p);
     b.swap(0, p);
-    if !is_above(a[0][0], tol) {
+    if !is_pivot(a[0][0]) {
         return None;
     }
     let f1 = a[1][0] / a[0][0];
@@ -198,13 +233,13 @@ fn solve3(mut a: [[f64; 3]; 3], mut b: [f64; 3], tol: f64) -> Option<[f64; 3]> {
         a.swap(1, 2);
         b.swap(1, 2);
     }
-    if !is_above(a[1][1], tol) {
+    if !is_pivot(a[1][1]) {
         return None;
     }
     let f = a[2][1] / a[1][1];
     a[2][2] -= f * a[1][2];
     b[2] -= f * b[1];
-    if !is_above(a[2][2], tol) {
+    if !is_pivot(a[2][2]) {
         return None;
     }
 
@@ -332,6 +367,86 @@ mod tests {
             [1.0, 0.0, 0.0, 0.0],
         ];
         assert_eq!(solve(&a, &[1.0, 2.0, 3.0, 4.0]), Some([4.0, 3.0, 2.0, 1.0]));
+    }
+
+    #[test]
+    fn badly_scaled_but_invertible_matrices_are_solved() {
+        // 0.1.0 compared every pivot with the largest entry of the whole
+        // matrix, so entries spanning more than about 7e13 were called
+        // singular (#16). Rows and columns are now equilibrated first.
+        assert_eq!(solve(&[[1e-300]], &[1.0]), Some([1.0 / 1e-300]));
+        assert_eq!(
+            solve(&[[1e300, 0.0], [0.0, 1e-300]], &[1.0, 1.0]),
+            Some([1.0 / 1e300, 1.0 / 1e-300])
+        );
+        assert_eq!(
+            solve(
+                &[[1e200, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1e-200]],
+                &[1.0, 1.0, 1.0]
+            ),
+            Some([1.0 / 1e200, 1.0, 1.0 / 1e-200])
+        );
+        // The metric just outside a horizon, `diag(-f, 1/f, r², r²)`.
+        let f = 1e-12;
+        let metric = [
+            [-f, 0.0, 0.0, 0.0],
+            [0.0, 1.0 / f, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let x = solve(&metric, &[1.0, 1.0, 1.0, 1.0]).expect("invertible");
+        assert_eq!(x, [1.0 / -f, 1.0 / (1.0 / f), 1.0, 1.0]);
+
+        // Scaling the rows of a system does not change its solution.
+        fn scaled<const N: usize>(scales: [f64; N]) {
+            let mut rng = Lcg(0xfeed + N as u64);
+            for _ in 0..50 {
+                let a = symmetric_indefinite::<N>(&mut rng);
+                let b: [f64; N] = core::array::from_fn(|_| rng.next() * 3.0);
+                let plain = solve(&a, &b).expect("well conditioned");
+                let sa: [[f64; N]; N] = core::array::from_fn(|i| a[i].map(|x| x * scales[i]));
+                let sb: [f64; N] = core::array::from_fn(|i| b[i] * scales[i]);
+                let x = solve(&sa, &sb).expect("a row-scaled invertible matrix");
+                for i in 0..N {
+                    let scale = 1.0_f64.max(plain[i].abs());
+                    assert!(
+                        (x[i] - plain[i]).abs() <= 1e-12 * scale,
+                        "N = {N}: {x:?} vs {plain:?}"
+                    );
+                }
+            }
+        }
+        scaled([1e150, 1e-150]);
+        scaled([1e-150, 1.0, 1e150]);
+        scaled([1e150, 1.0, 1e-150, 1e100]);
+        scaled([1e-200, 1e200, 1.0, 1e-100, 1e100, 1.0]);
+
+        // Nor does scaling rows and columns alike, `D·A·D`: the mass matrix
+        // in coordinates of very different units. Every pivot is then tiny
+        // next to its own row, which pivoting on rows alone calls singular.
+        fn congruent<const N: usize>(d: [f64; N]) {
+            let mut rng = Lcg(0xbeef + N as u64);
+            for _ in 0..50 {
+                let a = symmetric_indefinite::<N>(&mut rng);
+                let b: [f64; N] = core::array::from_fn(|_| rng.next() * 3.0);
+                let plain = solve(&a, &b).expect("well conditioned");
+                let da: [[f64; N]; N] =
+                    core::array::from_fn(|i| core::array::from_fn(|j| d[i] * a[i][j] * d[j]));
+                let db: [f64; N] = core::array::from_fn(|i| d[i] * b[i]);
+                let y = solve(&da, &db).expect("a congruent invertible matrix");
+                for i in 0..N {
+                    let scale = 1.0_f64.max(plain[i].abs());
+                    assert!(
+                        (y[i] * d[i] - plain[i]).abs() <= 1e-12 * scale,
+                        "N = {N}: {y:?} vs {plain:?}"
+                    );
+                }
+            }
+        }
+        congruent([1e-20, 1.0]);
+        congruent([1e-20, 1.0, 1e20]);
+        congruent([1e60, 1.0, 1e-60, 1e30]);
+        congruent([1e-40, 1e40, 1.0, 1e-20, 1e20]);
     }
 
     #[test]

@@ -24,8 +24,7 @@ impl<const N: usize> State<N> {
     }
 }
 
-/// One accepted integration step as a quintic Hermite polynomial per
-/// coordinate.
+/// One accepted integration step as a polynomial per coordinate.
 ///
 /// The polynomial matches position, velocity **and acceleration** at both
 /// ends of the step, so consecutive segments join with a continuous second
@@ -41,7 +40,9 @@ impl<const N: usize> State<N> {
 /// step, so its first three coefficients are the starting position,
 /// velocity and half the starting acceleration themselves.
 /// [`start`](Segment::start) therefore returns the solver's knot bit for
-/// bit. The end of a segment agrees with the start of the next to rounding
+/// bit, with one exception: an acceleration below `f64::MIN_POSITIVE` in
+/// magnitude (a subnormal number) can lose its last bit to the halving. The
+/// end of a segment agrees with the start of the next to rounding
 /// (`PLAN.md` §7).
 ///
 /// # Accuracy between the ends
@@ -52,6 +53,23 @@ impl<const N: usize> State<N> {
 /// double pendulum that was measured at around twenty times the error at
 /// the ends (`PLAN.md` §7). Tighten the tolerance if mid-step accuracy
 /// matters.
+///
+/// # Very short steps
+///
+/// For an ordinary step the polynomial is the quintic through position,
+/// velocity and acceleration at both ends. A step can be far shorter than
+/// the solver would choose, because
+/// [`Stepper::step_bounded`](crate::Stepper::step_bounded) lands on its
+/// target however close it is. The ends of such a step differ by little
+/// more than their rounding, which the quintic would divide by powers of the
+/// step on its way to the acceleration. Instead the segment is a cubic
+/// through the start and the end acceleration, or a quartic through the
+/// velocities and accelerations at both ends, whichever reaches the end to
+/// rounding, and the start's Taylor quadratic if no polynomial can be
+/// represented at all. For steps from one ulp of the time to `1e-4`, the
+/// acceleration inside agrees with the equations of motion to `4e-11`
+/// (`short_steps_agree_with_the_equations_of_motion_inside`, in
+/// `tests/stepper.rs`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Segment<const N: usize> {
     pub(crate) t0: f64,
@@ -60,43 +78,152 @@ pub struct Segment<const N: usize> {
     pub(crate) c: [[f64; 6]; N],
 }
 
+/// The six coefficients of one coordinate over a step of length `h`, in
+/// powers of the time since its start.
+///
+/// `inc_q` and `inc_v` are the step's position and velocity increments. A
+/// solver passes them as it computed them, before adding them to the start
+/// knot: they then carry the rounding of the step rather than of the state.
+///
+/// Every rate below is formed by successive division, so no power of `h` is
+/// ever formed: `h⁵` underflows to zero below `h ≈ 1e-62`, and 0.1.0 divided
+/// by it (#7). The candidates are tried from the one with the least noise:
+///
+/// 1. the cubic through the start knot and the end acceleration, which uses
+///    no difference of positions or velocities at all;
+/// 2. the quartic through the velocities and accelerations at both ends,
+///    which loses nothing to the rounding of positions;
+/// 3. the quintic through everything, for ordinary steps.
+///
+/// The first two are used only where they reach the end knot to rounding
+/// anyway, which is exactly where the quintic's divisions by `h` turn that
+/// rounding into noise.
+#[allow(clippy::too_many_arguments)]
+fn coefficients(
+    h: f64,
+    q0: f64,
+    v0: f64,
+    a0: f64,
+    inc_q: f64,
+    inc_v: f64,
+    q1: f64,
+    v1: f64,
+    a1: f64,
+) -> [f64; 6] {
+    let taylor = [q0, v0, 0.5 * a0, 0.0, 0.0, 0.0];
+    if !(h > 0.0 && h.is_finite()) {
+        return taylor;
+    }
+    let q_rounding = 2.0 * f64::EPSILON * q0.abs().max(q1.abs()).max(inc_q.abs());
+    let v_rounding = 4.0 * f64::EPSILON * v0.abs().max(v1.abs()).max(inc_v.abs());
+    // The end acceleration's change, as a rate in units of q per time cubed.
+    let a = (a1 - a0) / h;
+
+    let c3 = a / 6.0;
+    let reach_q = h * (v0 + h * (0.5 * a0 + h * c3));
+    let reach_v = h * (a0 + 3.0 * h * c3);
+    if c3.is_finite()
+        && (reach_q - inc_q).abs() <= q_rounding
+        && (reach_v - inc_v).abs() <= v_rounding
+    {
+        return [q0, v0, 0.5 * a0, c3, 0.0, 0.0];
+    }
+
+    let v = (inc_v - h * a0) / h / h;
+    let c3 = v - a / 3.0;
+    let c4 = (a - 2.0 * v) / 4.0 / h;
+    let reach = h * (v0 + h * (0.5 * a0 + h * (c3 + h * c4)));
+    if c3.is_finite() && c4.is_finite() && (reach - inc_q).abs() <= q_rounding {
+        return [q0, v0, 0.5 * a0, c3, c4, 0.0];
+    }
+
+    let p = (inc_q - h * (v0 + 0.5 * h * a0)) / h / h / h;
+    let quintic = [
+        q0,
+        v0,
+        0.5 * a0,
+        10.0 * p - 4.0 * v + 0.5 * a,
+        (-15.0 * p + 7.0 * v - a) / h,
+        (6.0 * p - 3.0 * v + 0.5 * a) / h / h,
+    ];
+    if quintic.iter().all(|c| c.is_finite()) {
+        quintic
+    } else {
+        taylor
+    }
+}
+
 impl<const N: usize> Segment<N> {
-    /// The quintic through `start` and `end`, matching `q`, `dq` and `ddq`
-    /// at both.
+    /// The polynomial through `start` and `end`, matching `q`, `dq` and
+    /// `ddq` at both (to rounding; see [Very short steps](Segment#very-short-steps)).
     ///
     /// # Panics
     ///
     /// In debug builds, if `end.t` is not after `start.t`.
     pub fn from_knots(start: &State<N>, end: &State<N>) -> Self {
+        debug_assert!(end.t > start.t, "a segment must run forward in time");
+        let inc_q = core::array::from_fn(|i| end.q[i] - start.q[i]);
+        let inc_dq = core::array::from_fn(|i| end.dq[i] - start.dq[i]);
+        Self::from_step(start, end, &inc_q, &inc_dq)
+    }
+
+    /// The same, from the increments a solver added to the start knot.
+    pub(crate) fn from_step(
+        start: &State<N>,
+        end: &State<N>,
+        inc_q: &[f64; N],
+        inc_dq: &[f64; N],
+    ) -> Self {
         let h = end.t - start.t;
-        debug_assert!(h > 0.0, "a segment must run forward in time");
-        let (h3, h4, h5) = (h * h * h, h * h * h * h, h * h * h * h * h);
         let c = core::array::from_fn(|i| {
-            // In the normalized variable τ = (t − t0)/h the low coefficients
-            // are q, h·q̇ and ½h²·q̈ …
-            let c1 = h * start.dq[i];
-            let c2 = 0.5 * h * h * start.ddq[i];
-            // … and this is what is left for the three high ones to account
-            // for at τ = 1, in position, velocity and acceleration.
-            let d = end.q[i] - start.q[i] - c1 - c2;
-            let dv = h * end.dq[i] - c1 - 2.0 * c2;
-            let da = h * h * end.ddq[i] - 2.0 * c2;
-            // Stored in powers of (t − t0): the low three are then the knot
-            // itself, with no rounding from scaling by h and back.
-            [
+            coefficients(
+                h,
                 start.q[i],
                 start.dq[i],
-                0.5 * start.ddq[i],
-                (10.0 * d - 4.0 * dv + 0.5 * da) / h3,
-                (-15.0 * d + 7.0 * dv - da) / h4,
-                (6.0 * d - 3.0 * dv + 0.5 * da) / h5,
-            ]
+                start.ddq[i],
+                inc_q[i],
+                inc_dq[i],
+                end.q[i],
+                end.dq[i],
+                end.ddq[i],
+            )
         });
         Self {
             t0: start.t,
             t1: end.t,
             c,
         }
+    }
+
+    /// Why this segment could not have come from a solver, if it could not:
+    /// times that are not finite, a duration that is not positive and
+    /// finite, or a polynomial that can overflow somewhere inside.
+    ///
+    /// The overflow test bounds `|q|`, `|q'|` and `|q''|` over the whole
+    /// segment by evaluating each with the absolute values of the
+    /// coefficients at the end. If the bounds are finite, every sample
+    /// inside is.
+    pub(crate) fn defect(&self) -> Option<&'static str> {
+        if !(self.t0.is_finite() && self.t1.is_finite()) {
+            return Some("a segment's start and end times must be finite");
+        }
+        let h = self.t1 - self.t0;
+        if h.partial_cmp(&0.0) != Some(core::cmp::Ordering::Greater) {
+            return Some("a segment must run forward in time");
+        }
+        if !h.is_finite() {
+            return Some("a segment's duration must be finite");
+        }
+        for c in &self.c {
+            let c = c.map(f64::abs);
+            let q = c[0] + h * (c[1] + h * (c[2] + h * (c[3] + h * (c[4] + h * c[5]))));
+            let v = c[1] + h * (2.0 * c[2] + h * (3.0 * c[3] + h * (4.0 * c[4] + h * 5.0 * c[5])));
+            let a = 2.0 * c[2] + h * (6.0 * c[3] + h * (12.0 * c[4] + h * 20.0 * c[5]));
+            if !(q.is_finite() && v.is_finite() && a.is_finite()) {
+                return Some("a segment's polynomial must stay finite between its ends");
+            }
+        }
+        None
     }
 
     /// The time at which the segment starts.

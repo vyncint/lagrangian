@@ -212,3 +212,23 @@ pub(crate) fn advance<L: Lagrangian<N>, const N: usize>(
     }
     stepper.state()
 }
+
+/// Runs `f` on its own thread and returns its result, or fails the test if
+/// it has not returned after `seconds`: a call that never returns would
+/// otherwise hang the whole suite instead of failing one test. A thread that
+/// is still spinning is left behind; the test binary's exit ends it.
+#[track_caller]
+pub(crate) fn within<T: Send + 'static>(
+    seconds: u64,
+    what: &str,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(f());
+    });
+    match receive.recv_timeout(std::time::Duration::from_secs(seconds)) {
+        Ok(value) => value,
+        Err(_) => panic!("{what}: did not return within {seconds} s"),
+    }
+}

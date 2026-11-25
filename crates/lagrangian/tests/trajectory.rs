@@ -3,7 +3,9 @@
 
 mod common;
 
-use common::{CoupledOscillators, Lcg, Pendulum, check, rel, tight};
+use std::cell::Cell;
+
+use common::{CoupledOscillators, Lcg, Pendulum, check, rel, tight, within};
 use lagrangian::prelude::*;
 use lagrangian::systems::DoublePendulum;
 
@@ -31,9 +33,12 @@ fn position_velocity_and_acceleration_are_continuous_across_steps() {
             ddq = ddq.max(rel(left.ddq[i], right.ddq[i]));
         }
     }
-    check("continuity across knots: position", q, 1e-15);
+    // A segment is built from the increments the solver added to its start
+    // knot, not from the difference of two rounded knots, so it ends within
+    // one rounding of the next knot rather than on it (PLAN.md §7.1).
+    check("continuity across knots: position", q, 3e-15);
     check("continuity across knots: velocity", dq, 5e-15);
-    check("continuity across knots: acceleration", ddq, 3e-13);
+    check("continuity across knots: acceleration", ddq, 4e-13);
 }
 
 #[test]
@@ -264,6 +269,140 @@ fn a_span_that_runs_backward_is_refused_and_an_empty_one_is_empty() {
             .is_empty()
     );
     assert_eq!(empty.action(&osc), 0.0);
+}
+
+#[test]
+fn push_refuses_what_reading_a_file_refuses() {
+    // A segment built by hand is held to the same rules as one read from a
+    // file (#8): a finite duration, and a polynomial that stays finite.
+    let start = State {
+        t: -1e308,
+        q: [0.0],
+        dq: [0.0],
+        ddq: [0.0],
+    };
+    let end = State { t: 1e308, ..start };
+    let mut traj = Trajectory::new(start);
+    let result = traj.push(Segment::from_knots(&start, &end));
+    assert!(
+        matches!(result, Err(SimError::InvalidConfig { .. })),
+        "{result:?}"
+    );
+
+    let start = State {
+        t: 0.0,
+        q: [0.0],
+        dq: [1e308],
+        ddq: [0.0],
+    };
+    let end = State { t: 10.0, ..start };
+    let mut traj = Trajectory::new(start);
+    let result = traj.push(Segment::from_knots(&start, &end));
+    assert!(
+        matches!(result, Err(SimError::InvalidConfig { .. })),
+        "{result:?}"
+    );
+    assert_eq!(traj.len_segments(), 0);
+
+    let end = State {
+        t: 10.0,
+        q: [1.0],
+        dq: [0.1],
+        ddq: [0.0],
+    };
+    let start = State {
+        t: 0.0,
+        q: [0.0],
+        dq: [0.1],
+        ddq: [0.0],
+    };
+    let mut traj = Trajectory::new(start);
+    traj.push(Segment::from_knots(&start, &end)).unwrap();
+    assert_eq!(traj.end(), Segment::from_knots(&start, &end).end());
+}
+
+#[test]
+fn an_endless_span_is_refused() {
+    // An infinite span ran a million steps and kept their segments before
+    // it gave up, or at rest never returned (#4, #5). A NaN end used to
+    // return at once having done nothing, which hid the mistake.
+    let osc = CoupledOscillators { k: 1.0, kc: 0.5 };
+    let config = SimConfig::default();
+    for span in [
+        (0.0, f64::INFINITY),
+        (f64::NEG_INFINITY, 0.0),
+        (0.0, f64::NAN),
+        (f64::NAN, 1.0),
+    ] {
+        let result = simulate(&osc, span, [1.0, 0.0], [0.0, 0.0], &config);
+        assert!(
+            matches!(result, Err(SimError::InvalidConfig { .. })),
+            "{span:?}: {result:?}"
+        );
+    }
+    let mut stepper = Stepper::new(&osc, 0.0, [1.0, 0.0], [0.0, 0.0], config).unwrap();
+    let mut traj = Trajectory::new(stepper.state());
+    for t_until in [f64::INFINITY, f64::NAN] {
+        let result = traj.extend(&mut stepper, t_until);
+        assert!(
+            matches!(result, Err(SimError::InvalidConfig { .. })),
+            "{t_until}: {result:?}"
+        );
+    }
+    assert_eq!(traj.len_segments(), 0);
+}
+
+#[test]
+fn a_huge_sample_count_is_capped() {
+    // `usize::MAX` samples meant 2⁶⁴ evaluations, and the call never
+    // returned (#5). The caps are documented: 2¹⁶ interior points per step
+    // for crossings, 2²⁰ samples for the energy drift.
+    let (segments, crossing_calls, drift_calls, per_energy) =
+        within(120, "the capped sample counts", || {
+            let pendulum = Pendulum { l: 1.0, g: 9.81 };
+            let traj =
+                simulate(&pendulum, (0.0, 0.05), [0.3], [0.0], &SimConfig::default()).unwrap();
+            let calls = Cell::new(0_usize);
+            let indicator = |s: &State<1>| {
+                calls.set(calls.get() + 1);
+                s.q[0]
+            };
+            traj.crossings_with(indicator, CrossingDirection::Either, usize::MAX);
+            let crossing_calls = calls.replace(0);
+
+            let counting = Counting {
+                inner: pendulum,
+                calls: Cell::new(0),
+            };
+            traj.energy(&counting, 0.0);
+            let per_energy = counting.calls.replace(0);
+            traj.energy_drift(&counting, usize::MAX);
+            (
+                traj.len_segments(),
+                crossing_calls,
+                counting.calls.get(),
+                per_energy,
+            )
+        });
+    let pieces = (1 << 16) + 1;
+    assert!(
+        crossing_calls >= segments * pieces && crossing_calls <= segments * (pieces + 1) + 1,
+        "{crossing_calls} indicator calls for {segments} steps"
+    );
+    assert_eq!(drift_calls, (1 << 20) * per_energy);
+}
+
+/// A system that counts how often its Lagrangian is evaluated.
+struct Counting {
+    inner: Pendulum,
+    calls: Cell<usize>,
+}
+
+impl Lagrangian<1> for Counting {
+    fn lagrangian<S: Scalar>(&self, q: [S; 1], dq: [S; 1], t: S) -> S {
+        self.calls.set(self.calls.get() + 1);
+        self.inner.lagrangian(q, dq, t)
+    }
 }
 
 #[test]

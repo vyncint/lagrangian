@@ -321,3 +321,246 @@ fn the_system_can_be_owned_or_borrowed() {
     );
     assert_eq!(owned.into_system().kc, 5.0);
 }
+
+// ---------------------------------------------------------------------------
+// Found by deep-testing 0.1.0: each of these hung or failed on that release.
+// ---------------------------------------------------------------------------
+
+use common::within;
+use lagrangian::systems::BeadOnRotatingHoop;
+
+#[test]
+fn a_system_at_rest_can_be_stepped_for_ever() {
+    // At rest the error estimate is zero and every step is ten times the
+    // last. In 0.1.0 the step size reached infinity at step 316 and the next
+    // `step()` never returned (#4).
+    let state = within(20, "2,000 steps at rest", || {
+        let pendulum = DoublePendulum::default();
+        let mut stepper =
+            Stepper::new(pendulum, 0.0, [0.0, 0.0], [0.0, 0.0], SimConfig::default()).unwrap();
+        for _ in 0..2_000 {
+            if stepper.step().is_err() {
+                break;
+            }
+        }
+        stepper.state()
+    });
+    assert!(state.is_finite());
+    assert_eq!((state.q, state.dq), ([0.0, 0.0], [0.0, 0.0]));
+}
+
+#[test]
+fn a_huge_first_step_at_rest_returns() {
+    // `initial_step = 1e300` reached infinity at step 10 (#4).
+    within(20, "50 steps from initial_step = 1e300", || {
+        let config = SimConfig::default().with_initial_step(1e300);
+        let mut stepper = Stepper::new(
+            DoublePendulum::default(),
+            0.0,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            config,
+        )
+        .unwrap();
+        for _ in 0..50 {
+            if stepper.step().is_err() {
+                break;
+            }
+        }
+    });
+}
+
+#[test]
+fn a_first_estimate_that_is_not_finite_is_not_retried() {
+    // Tolerances this extreme overflow the first step's estimate to
+    // inf / inf; 0.1.0 took `NaN.min(∞) = ∞` as the step and spun (#4).
+    // Found by the randomized harness.
+    let result = within(20, "one step with rtol = 1e-300", || {
+        let pendulum = DoublePendulum {
+            m1: 4.346483117583914,
+            m2: 5.456495441113472,
+            l1: 5.069732213915581,
+            l2: 3.947854346211175,
+            g: 8.17791321224835,
+        };
+        let config = SimConfig::default().with_tolerances(1e-300, -0.0);
+        let mut stepper = Stepper::new(
+            pendulum,
+            5.853723741720449,
+            [0.054985307588201415, 1.276534168544079],
+            [1e8, 1.1962448653513187],
+            config,
+        )
+        .unwrap();
+        stepper.step().map(|segment| segment.duration())
+    });
+    assert!(
+        result.is_err(),
+        "a tolerance of 1e-300 cannot be met: {result:?}"
+    );
+}
+
+#[test]
+fn a_rejected_landing_step_does_not_land_again() {
+    // 4 ulps short of the target, a step shrunk after a rejection rounded
+    // back up to the target and was retried at full length for ever (#4).
+    let result = within(20, "a bounded step 4 ulps ahead", || {
+        let pendulum = BeadOnRotatingHoop {
+            m: 8.244420190243595,
+            radius: 9.068998568970494,
+            omega: 0.0,
+            g: 6.858082903206711,
+        };
+        let t = 81736571671730.98;
+        let config = SimConfig::default().with_initial_step(1.0);
+        let mut stepper = Stepper::new(
+            pendulum,
+            t,
+            [0.26528493447641743],
+            [-0.9606815610963055],
+            config,
+        )
+        .unwrap();
+        stepper
+            .step_bounded(t + 0.06085352855979096)
+            .map(|segment| segment.duration())
+    });
+    // At this time the clock cannot resolve the steps the motion needs.
+    assert!(
+        matches!(result, Err(SimError::StepSizeUnderflow { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_new_state_starts_from_a_new_step_size() {
+    // After a long rest the step size is as large as the configuration
+    // allows; a moving state set afterwards took its first step from it and
+    // shrank it back one rejection at a time. Its next step is now the one a
+    // new stepper would take from the same state.
+    let pendulum = DoublePendulum::default();
+    let config = SimConfig::default().with_max_step(1e3);
+    let mut rested = Stepper::new(&pendulum, 0.0, [0.0, 0.0], [0.0, 0.0], config).unwrap();
+    for _ in 0..50 {
+        rested.step().unwrap();
+    }
+    let t = rested.state().t;
+    assert!(
+        t > 1e4,
+        "the rest should have reached the largest step, t = {t}"
+    );
+    rested.set_state([2.2, 2.8], [0.0, 0.0]).unwrap();
+    let mut fresh = Stepper::new(&pendulum, t, [2.2, 2.8], [0.0, 0.0], config).unwrap();
+    for _ in 0..5 {
+        assert_eq!(rested.step().unwrap(), fresh.step().unwrap());
+    }
+}
+
+/// A step from t = `t0` to `t0 + h`, and the state the stepper is left in.
+fn one_step(config: SimConfig, t0: f64, h: f64) -> (Segment<2>, State<2>, State<2>) {
+    let mut stepper = Stepper::new(
+        DoublePendulum::default(),
+        t0,
+        [1.0, 2.0],
+        [0.5, -0.3],
+        config,
+    )
+    .unwrap();
+    let knot = stepper.state();
+    let segment = stepper.step_bounded(t0 + h).unwrap();
+    (segment, knot, stepper.state())
+}
+
+#[test]
+fn a_vanishingly_short_step_gives_a_finite_segment() {
+    // In 0.1.0 the coefficients were x / h⁵: below h ≈ 1e-64 they were
+    // infinite and the segment NaN, although the stepper's own state was
+    // fine (#7).
+    for config in [
+        SimConfig::default(),
+        SimConfig::variational4(0.01),
+        SimConfig::variational2(0.01),
+    ] {
+        for h in [1e-65, 1e-70, 1e-80, 1e-150, 1e-200, 1e-300, 5e-324] {
+            let (segment, knot, end) = one_step(config, 0.0, h);
+            assert!(end.is_finite());
+            assert_eq!(segment.start(), knot, "{:?} h = {h:e}", config.solver);
+            for tau in [0.0, 0.21, 0.5, 0.79, 1.0] {
+                assert!(
+                    segment.eval(tau).is_finite(),
+                    "{:?} h = {h:e} τ = {tau}",
+                    config.solver
+                );
+            }
+            for (reached, knot) in segment.end().q.into_iter().zip(end.q) {
+                assert!((reached - knot).abs() <= 4.0 * f64::EPSILON * knot.abs());
+            }
+        }
+    }
+}
+
+#[test]
+fn short_steps_agree_with_the_equations_of_motion_inside() {
+    // 0.1.0 divided the rounding of the knots' positions by powers of h:
+    // from t = 1, a one-ulp step had velocities off by order one inside and
+    // accelerations 1.2% off the equations of motion there, a thousand-ulp
+    // step 2e-5 (#7). At t = 1e6 the clock's resolution is 1.2e-10, so every
+    // short step there is a variational one, not a Taylor one.
+    let pendulum = DoublePendulum::default();
+    for config in [SimConfig::default(), SimConfig::variational4(0.01)] {
+        let mut worst = 0.0_f64;
+        for t0 in [1.0, 1e6] {
+            let clock = f64::EPSILON * t0;
+            for h in [clock, 4.0 * clock, 1e3 * clock, 1e-9, 1e-6, 1e-4] {
+                if h < clock {
+                    continue;
+                }
+                let (segment, _, _) = one_step(config, t0, h);
+                for tau in [0.21, 0.5, 0.79] {
+                    let s = segment.eval(tau);
+                    let eom = accelerations(&pendulum, s.q, s.dq, s.t).unwrap();
+                    for i in 0..2 {
+                        worst = worst.max(rel(s.ddq[i], eom[i]));
+                    }
+                }
+            }
+        }
+        let name = format!(
+            "short steps, {:?}: acceleration inside vs the EOM",
+            config.solver
+        );
+        check(&name, worst, LIMIT_SHORT);
+    }
+}
+
+/// Measured 3.6e-12 for both solvers, from the step of 1e-6 at t = 1:
+/// there the cubic through the start and the end acceleration reaches the
+/// end knot to rounding, and its interpolated acceleration is off by
+/// `h²·q⁽⁴⁾/8` (PLAN.md §7.1).
+const LIMIT_SHORT: f64 = 4e-11;
+
+#[test]
+fn a_subnormal_acceleration_is_the_one_inexact_start() {
+    // Documented on `Segment`: halving a subnormal acceleration can lose its
+    // last bit. Position and velocity stay exact.
+    let orbit = KeplerOrbit::default();
+    let mut stepper = Stepper::new(
+        &orbit,
+        0.0,
+        [0.68, 2.5],
+        [-5e-324, 2.95],
+        SimConfig::default(),
+    )
+    .unwrap();
+    let knot = stepper.state();
+    assert!(
+        knot.ddq[1] != 0.0 && knot.ddq[1].abs() < f64::MIN_POSITIVE,
+        "the case needs a subnormal acceleration"
+    );
+    let start = stepper.step().unwrap().start();
+    assert_eq!(
+        (start.q, start.dq, start.ddq[0]),
+        (knot.q, knot.dq, knot.ddq[0])
+    );
+    assert!((start.ddq[1] - knot.ddq[1]).abs() <= 5e-324);
+}

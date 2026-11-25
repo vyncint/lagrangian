@@ -16,8 +16,9 @@ pub enum SimError {
         /// The time at which it was evaluated.
         t: f64,
     },
-    /// The adaptive solver could not meet its tolerance with any step it is
-    /// allowed to take.
+    /// No step the solver may take advances the solution: the adaptive
+    /// solver cannot meet its tolerance with any step the clock resolves, or
+    /// a fixed `dt` is below the clock's resolution at this time.
     StepSizeUnderflow {
         /// The time at which the step size collapsed.
         t: f64,
@@ -56,7 +57,7 @@ impl fmt::Display for SimError {
             }
             Self::StepSizeUnderflow { t } => write!(
                 f,
-                "the step size underflowed at t = {t}: the tolerance cannot be met"
+                "the step size underflowed at t = {t}: no step the solver may take advances the solution"
             ),
             Self::MaxStepsExceeded { t } => {
                 write!(f, "the step budget ran out at t = {t}")

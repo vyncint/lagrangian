@@ -180,6 +180,33 @@ fn the_indefinite_metric_goes_through_the_general_solver() {
 }
 
 #[test]
+fn the_metric_just_outside_the_horizon_is_not_singular() {
+    // g_tt = −f and g_rr = 1/f with f → 0 at the horizon: 0.1.0 called the
+    // metric singular from r = r_s·(1 + 1e-7) inward, although it is
+    // invertible everywhere outside the horizon (#16). Held at rest there,
+    // r̈ = −(r_s/2r²)·f·ṫ² = −r_s/(2r²), since f·ṫ² = 1.
+    let hole = SchwarzschildGeodesic::default();
+    let mut worst = 0.0_f64;
+    for gap in [1e-6, 1e-7, 1e-9, 1e-12] {
+        let r = hole.rs * (1.0 + gap);
+        let q = [0.0, r, FRAC_PI_2, 0.0];
+        let u = hole.timelike_velocity(r, 0.0, 0.0);
+        let ddq = accelerations(&hole, q, u, 0.0)
+            .unwrap_or_else(|e| panic!("r = r_s·(1 + {gap:e}): {e}"));
+        worst = worst.max(rel(ddq[1], -hole.rs / (2.0 * r * r)));
+        assert_eq!((ddq[0], ddq[2], ddq[3]), (0.0, 0.0, 0.0), "{ddq:?}");
+    }
+    check(
+        "Schwarzschild: r̈ at rest just outside the horizon",
+        worst,
+        LIMIT_HORIZON,
+    );
+}
+
+/// Measured 5.6e-17, one rounding of `r_s/(2r²)` (PLAN.md §7.1).
+const LIMIT_HORIZON: f64 = 6e-16;
+
+#[test]
 fn light_circles_the_photon_sphere_and_only_just() {
     let hole = SchwarzschildGeodesic { rs: 1.0 };
     let radius = hole.photon_sphere();
