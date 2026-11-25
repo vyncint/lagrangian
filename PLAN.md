@@ -258,7 +258,7 @@ cargo test -p lagrangian --release -- --nocapture | grep '^measured'
 | Same, five points inside each step | | default $1.7 \times 10^{-8}$<br>tight $1.9 \times 10^{-11}$ | $2 \times 10^{-7}$<br>$2 \times 10^{-10}$ | `energy.rs` |
 | Rotating hoop Jacobi integral | $R = 1$, $\Omega = 5$, $\theta_0 = 0.3$ at rest, $t \in [0, 20]$, tight | knots $8.1 \times 10^{-12}$<br>mid-step $9.0 \times 10^{-12}$ | $10^{-10}$ | `energy.rs` |
 | Rotating hoop tilted equilibrium | Acceleration at $\cos\theta^* = g/(R\Omega^2)$ | $1.8 \times 10^{-15}$ | $2 \times 10^{-14}$ | `energy.rs` |
-| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.2 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
+| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.1 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
 | Same, by quarter of the run | $dt = 0.005$ | $1.95, 1.91, 1.79, 1.84 \times 10^{-5}$ | last ≤ 2× first | `energy.rs` |
 | Kepler $p_\theta$, `Variational4` | $\mu = 1$, $r_0 = 1$, $\dot{\theta}_0 = 1.2$, $dt = 0.02$, $10^4$ steps | $3.7 \times 10^{-16}$ | $5 \times 10^{-15}$ | `energy.rs`, `stepper.rs` |
 | Same, $2 \times 10^5$ steps | Measured once, not a test | $5.6 \times 10^{-16}$ | | |
