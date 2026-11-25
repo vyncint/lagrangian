@@ -1,7 +1,7 @@
 # `lagrangian` — Architectural & Product Plan
 
 > Revised 2026-11-25 after a registry and demand check and a numerical feasibility prototype.
-> Figures marked *measured* come from those checks and are listed in §7. Thresholds marked *provisional* must be re-baselined against the real implementation.
+> Figures marked *measured* come from the implementation's own verification suite and are listed in §7, together with what the earlier prototype established.
 
 ## 1. Thesis & Ecosystem Positioning
 
@@ -96,19 +96,21 @@ Relative drift is normalized by $\max(|E_0|, \max_t T_{\text{eff}})$, never by $
 DOPRI5's FSAL (First Same As Last) property yields exact $(q, \dot{q}, \ddot{q})$ at both endpoints of every accepted step at zero extra cost. A 6-coefficient **quintic Hermite spline** per DOF gives:
 - $\mathcal{O}(h^6)$ position accuracy
 - Exact kinematic identities: $\dot{q}(t) \equiv q'(t)$ and $\ddot{q}(t) \equiv q''(t)$
-- $C^0$-continuous acceleration across adaptive step boundaries (*measured* mismatch at knots: $10^{-14}$)
+- $C^0$-continuous acceleration across adaptive step boundaries (*measured* jump at a knot: $2.2 \times 10^{-14}$ relative, and $2.6 \times 10^{-16}$ in velocity)
 - Half the storage of separate polynomials for $q$ and $\dot{q}$
 
-**Interpolation accuracy is not governed by the step controller.** Mid-step velocity carries the interpolant's own $\mathcal{O}(h^5)$ truncation error. *Measured* on a chaotic double pendulum, mid-step energy error is 10–25× the error at knots. Tests must set separate thresholds for knots and mid-step samples.
+**Interpolation accuracy is not governed by the step controller.** Mid-step velocity carries the interpolant's own $\mathcal{O}(h^5)$ truncation error. *Measured* on a chaotic double pendulum, mid-step energy error is 5× the error at knots at default tolerances and 22× at tight ones. Tests set separate thresholds for knots and mid-step samples.
 
 Continuity of $\ddot{q}$ holds between changes of input or system parameters. At a knot where the input changes, $\ddot{q}$ jumps, as it does physically.
 
 ### 4. True Symplectic Variational Integrator (`Solver::Variational4`)
 Standard Velocity Verlet is **not** symplectic for non-separable systems like the double pendulum, where $M(q)$ depends on $q$. **Marsden-West Midpoint Discrete Euler-Lagrange** composed with **Yoshida's 4th-order symmetric triple step** preserves the symplectic form and conserves the momentum of every cyclic coordinate up to floating-point roundoff, under the same `Segment<N>` output as `Solver::Dopri5`.
 
-**Newton must solve for the increment $\Delta q = q_{k+1} - q_k$, not for $q_{k+1}$.** Differencing stored positions amplifies roundoff by $|q|/h$. *Measured* on a Kepler orbit, angular-momentum drift is $4.5 \times 10^{-14}$ after $10^4$ steps and $2.3 \times 10^{-12}$ after $10^6$ with the increment form, against $8.5 \times 10^{-11}$ and $3.9 \times 10^{-8}$ without it. Roundoff-limited conservation grows slowly with step count; never promise a fixed $10^{-14}$.
+**Newton must solve for the increment $\Delta q = q_{k+1} - q_k$, not for $q_{k+1}$.** Differencing stored positions amplifies roundoff by $|q|/h$: the prototype *measured* an angular-momentum drift of $8.5 \times 10^{-11}$ after $10^4$ steps that way.
 
-Energy error is bounded and 4th-order: *measured* on the chaotic double pendulum, the band is $8.3 \times 10^{-4}$, $4.7 \times 10^{-5}$ and $1.2 \times 10^{-6}$ for $dt = 0.01, 0.005, 0.002$, with no growth between the first and second half of $10^4$ steps.
+**The momentum update is $p_{k+1} = p_k + h\,(\nabla_q L + Q)$ at the midpoint**, which equals $D_2 L_d + \tfrac{h}{2} Q$ once the step equation holds. In this form a cyclic coordinate, for which $\partial L / \partial q_i$ is exactly zero, keeps its momentum to the last bit: the discrete Noether theorem holds exactly in the integrator's own variables, not merely to rounding. *Measured* on a Kepler orbit, the momentum recomputed from each knot's velocity drifts $3.7 \times 10^{-16}$ over $10^4$ steps and $5.6 \times 10^{-16}$ over $2 \times 10^5$: one rounding of the velocity recovery, which does not accumulate.
+
+Energy error is bounded and 4th-order: *measured* on the chaotic double pendulum over $10^4$ steps, the band is $3.9 \times 10^{-4}$ at $dt = 0.01$ and $2.2 \times 10^{-5}$ at $dt = 0.005$ (a ratio of 17 to 20), and no wider in the last quarter of the run than in the first.
 
 ### 5. Zero-Algebra World Kinematics (`Taylor2`) & `velocity_of` Combinator
 - **`SceneMap` + `Taylor2`:** Passing `Taylor2(q[i], dq[i], 0.5 * ddq[i])` ($c_0 + c_1 \tau + c_2 \tau^2 \pmod{\tau^3}$) through a user's position mapping yields 2D/3D Cartesian `[pos, vel, acc]` in a single call, capturing centripetal, tangential, Coriolis and moving-pivot accelerations.
@@ -122,7 +124,7 @@ In addition to unrolled solvers for $N = 1, 2, 3$, solving $M \ddot{q} = F$ with
 ### 7. Event Root-Finding & Poincaré Sections
 Brent's method on the quintic Hermite segments yields zero crossings (`traj.crossings(...)`), nonlinear period extraction and Poincaré sections with no solver reruns.
 
-The roots are accurate to $10^{-13}$ **with respect to the interpolant**. Accuracy against the true solution is bounded by the integration tolerance: *measured* pendulum period error is $1.6 \times 10^{-9}$ at default tolerances and $1.5 \times 10^{-12}$ at `rtol = 1e-12`.
+The roots are accurate to $10^{-13}$ **with respect to the interpolant**. Accuracy against the true solution is bounded by the integration tolerance: *measured* pendulum period error is $1.2 \times 10^{-9}$ at default tolerances and $1.1 \times 10^{-12}$ at `rtol = 1e-12`.
 
 Detection by sign change at knots misses an even number of crossings inside one step, so each segment is also sampled at interior points.
 
@@ -230,35 +232,86 @@ Cargo does not build `examples/*.rs` placed at a virtual workspace root. A loose
 
 ---
 
-## 7. Measured Baselines (prototype, 2026-11-25)
+## 7. Measured Baselines
 
-Prototype: IEEE doubles, hand-derived equations of motion, Dormand-Prince 5(4) with a plain integral controller, quintic Hermite coefficients exactly as specified in `PROMPT.md`. `atol = rtol / 100` throughout. Energy figures are relative drift.
+### 7.1 The implementation (2026-11-25)
 
-| Case | Setup | Measured |
-| --- | --- | --- |
-| Double pendulum energy, `Dopri5` | $m = l = 1$, $g = 9.81$, $q_0 = (2.2, 2.8)$ at rest, $t \in [0, 20]$ | `rtol=1e-10`: knots $5.0 \times 10^{-10}$, mid-step $5.6 \times 10^{-9}$<br>`rtol=1e-12`: knots $2.5 \times 10^{-12}$, mid-step $5.7 \times 10^{-11}$<br>`rtol=1e-13`: knots $2.2 \times 10^{-13}$, mid-step $3.3 \times 10^{-11}$ |
-| Same, $t \in [0, 100]$ | `rtol=1e-10` | knots $1.6 \times 10^{-9}$, mid-step $1.7 \times 10^{-8}$ |
-| Pendulum period vs elliptic integral | $l = 1$, $\theta_0 = 2.4$, first period from upward crossings | `rtol=1e-9`: $1.6 \times 10^{-9}$<br>`rtol=1e-12`: $1.5 \times 10^{-12}$ |
-| Coupled oscillator vs normal modes | $k = 1$, $k_c = 0.5$, $x_0 = (1, 0)$ at rest, $t \in [0, 20]$, max error in $q$ including mid-step | `rtol=1e-9`: $1.8 \times 10^{-9}$<br>`rtol=1e-12`: $1.7 \times 10^{-12}$ |
-| Rotating hoop Jacobi integral | $R = 1$, $\Omega = 5$, $\theta_0 = 0.3$ at rest, $t \in [0, 20]$ | `rtol=1e-9`: $1.1 \times 10^{-8}$<br>`rtol=1e-12`: $1.1 \times 10^{-11}$ |
-| Kepler $p_\theta$, `Variational4` | $GM = 1$, $r_0 = 1$, $\dot{\theta}_0 = 1.2$, $dt = 0.02$ | Newton on $\Delta q$: $4.5 \times 10^{-14}$ at $10^4$ steps, $2.3 \times 10^{-12}$ at $10^6$<br>Newton on $q_{k+1}$: $8.5 \times 10^{-11}$, $3.9 \times 10^{-8}$ |
-| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.01$: $8.3 \times 10^{-4}$<br>$dt = 0.005$: $4.7 \times 10^{-5}$<br>$dt = 0.002$: $1.2 \times 10^{-6}$ |
-| Continuity at knots | Double pendulum, `rtol=1e-10` | $q$: 0, $\dot{q}$: $2.2 \times 10^{-16}$, $\ddot{q}$: $1.0 \times 10^{-14}$ |
+Measured by the verification suite in `crates/lagrangian/tests/`, on `x86_64-unknown-linux-gnu` with rustc 1.100.0. Every test prints its measurement next to its limit:
 
-What the baselines established:
-- The original targets were not reachable as written. Double pendulum drift below $10^{-10}$ at `rtol=1e-10` fails by 5× at knots and 56× mid-step. Period, oscillator and hoop targets fail at default tolerances by 160×, 18× and 1,000×. The $10^{-14}$ momentum target fails by 4.5× in the best case.
-- Mid-step energy error is the interpolant's truncation error. Building the Hermite coefficients from the integrator's increments instead of differenced positions made no difference (tested), so that is not a fix.
-- At `rtol=1e-13` the mid-step figure stops improving near $3 \times 10^{-11}$. The cause was not identified.
-- Not prototyped: Schwarzschild, Kapitza, cart-pole linearization. Their thresholds in `PROMPT.md` are uncalibrated.
+```sh
+cargo test -p lagrangian --release -- --nocapture | grep '^measured'
+```
 
-**Rule:** once the real implementation exists, replace every provisional threshold with about 10× the measured value and update this table. Never loosen a threshold without recording the measurement and the reason here.
+"Default" is `rtol = 1e-9, atol = 1e-11`; "tight" is `rtol = 1e-12, atol = 1e-14`. Energy figures are relative to $\max(|E_0|, \max_t T_{\text{eff}})$. The same suite on `libm` instead of the platform's math library gives figures within 15% of these, with one exception noted in the table; where the two differ the larger is listed. Each limit is about 10× its measurement.
+
+| Case | Setup | Measured | Limit | Test |
+| --- | --- | --- | --- | --- |
+| Engine vs scalar hyper-dual oracle | Six built-in systems, 40 random states each, moving and at rest | $\le 7.1 \times 10^{-15}$; Schwarzschild $2.8 \times 10^{-14}$ | $10^{-13}$; $3 \times 10^{-13}$ | `oracle.rs` |
+| Legendre split vs $T$ and $V$ | Double pendulum, 40 random states | $2.2 \times 10^{-15}$ | $3 \times 10^{-14}$ | `oracle.rs` |
+| Velocity recovered from momentum | Double pendulum and Schwarzschild | $4.8 \times 10^{-16}$ | $10^{-14}$ | `oracle.rs` |
+| Coupled oscillators vs normal modes | $k = 1$, $k_c = 0.5$, $x_0 = (1, 0)$ at rest, $t \in [0, 20]$, mid-step included | default $1.4 \times 10^{-9}$<br>tight $1.3 \times 10^{-12}$ | $2 \times 10^{-8}$<br>$2 \times 10^{-11}$ | `analytic.rs` |
+| Pendulum period vs elliptic integral | $l = 1$, $g = 9.81$, $\theta_0 = 2.4$, first period | default $1.2 \times 10^{-9}$<br>tight $1.1 \times 10^{-12}$ | $2 \times 10^{-8}$<br>$2 \times 10^{-11}$ | `analytic.rs` |
+| Action of a unit oscillator | $x = \cos t$, $T = 7.3$, tight | $3.1 \times 10^{-13}$ | $3 \times 10^{-12}$ | `analytic.rs` |
+| Double pendulum energy, `Dopri5`, knots | $m = l = 1$, $g = 9.81$, $q_0 = (2.2, 2.8)$ at rest, $t \in [0, 20]$ | default $3.4 \times 10^{-9}$<br>tight $8.3 \times 10^{-13}$ | $5 \times 10^{-8}$<br>$10^{-11}$ | `energy.rs` |
+| Same, five points inside each step | | default $1.7 \times 10^{-8}$<br>tight $1.9 \times 10^{-11}$ | $2 \times 10^{-7}$<br>$2 \times 10^{-10}$ | `energy.rs` |
+| Rotating hoop Jacobi integral | $R = 1$, $\Omega = 5$, $\theta_0 = 0.3$ at rest, $t \in [0, 20]$, tight | knots $8.1 \times 10^{-12}$<br>mid-step $9.0 \times 10^{-12}$ | $10^{-10}$ | `energy.rs` |
+| Rotating hoop tilted equilibrium | Acceleration at $\cos\theta^* = g/(R\Omega^2)$ | $1.8 \times 10^{-15}$ | $2 \times 10^{-14}$ | `energy.rs` |
+| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.2 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
+| Same, by quarter of the run | $dt = 0.005$ | $1.95, 1.91, 1.79, 1.84 \times 10^{-5}$ | last ≤ 2× first | `energy.rs` |
+| Kepler $p_\theta$, `Variational4` | $\mu = 1$, $r_0 = 1$, $\dot{\theta}_0 = 1.2$, $dt = 0.02$, $10^4$ steps | $3.7 \times 10^{-16}$ | $5 \times 10^{-15}$ | `energy.rs`, `stepper.rs` |
+| Same, $2 \times 10^5$ steps | Measured once, not a test | $5.6 \times 10^{-16}$ | | |
+| Kepler energy band, `Variational4` | Same, $10^4$ steps | $3.3 \times 10^{-9}$ | $5 \times 10^{-8}$ | `energy.rs` |
+| Kepler $p_\theta$, `Dopri5` | Same orbit, $t \in [0, 200]$, tight | $2.5 \times 10^{-12}$ | $3 \times 10^{-11}$ | `energy.rs` |
+| Kepler energy by quarter, $t \in [0, 2000]$ | `Dopri5` at `rtol = 1e-5`<br>`Variational4` at $dt = 0.1$ | $4.4, 9.3, 14, 20 \times 10^{-4}$<br>$2.02 \times 10^{-6}$ in every quarter | grows > 3×<br>grows ≤ 1.5× | `energy.rs` |
+| Order of the variational solvers | Pendulum, error ratio on halving $dt$ | 4.004 and 15.97 | 3.6–4.4 and 13–19 | `stepper.rs` |
+| Continuity across knots | Double pendulum, `rtol = 1e-10` | $q$: $1.4 \times 10^{-17}$<br>$\dot{q}$: $2.6 \times 10^{-16}$<br>$\ddot{q}$: $2.2 \times 10^{-14}$ | $10^{-15}$<br>$5 \times 10^{-15}$<br>$3 \times 10^{-13}$ | `trajectory.rs` |
+| Event times | Pendulum, amplitude 1, 11 passages vs quarter periods, tight | $1.6 \times 10^{-12}$ | $2 \times 10^{-11}$ | `trajectory.rs` |
+| Energy on a Poincaré section | Double pendulum, small oscillations, $t \in [0, 200]$, tight | $1.7 \times 10^{-11}$ | $2 \times 10^{-10}$ | `trajectory.rs` |
+| Cart-pole linearization vs closed form | Three parameter sets, upright | $4.8 \times 10^{-16}$ | $10^{-14}$ | `control.rs` |
+| Linearization vs central differences | Double pendulum and damped, pushed cart-pole, 20 random states | $2.1 \times 10^{-9}$ (the differences' own error) | $3 \times 10^{-8}$ | `control.rs` |
+| Cart momentum under a constant push | `Variational4`, $dt = 0.01$, 200 steps | $1.1 \times 10^{-14}$ | $2 \times 10^{-13}$ | `control.rs` |
+| Schwarzschild conserved quantities | $r_s = 1$, from $r = 10$ with $\dot{\varphi} = 0.02$, proper time 2000, tight; $r \in [4.10, 10]$ | $p_t$: $8.9 \times 10^{-13}$<br>$p_\varphi$: $3.1 \times 10^{-12}$<br>norm: $3.7 \times 10^{-13}$<br>$\theta - \pi/2$: $8.9 \times 10^{-16}$ | $10^{-11}$<br>$4 \times 10^{-11}$<br>$5 \times 10^{-12}$<br>$10^{-14}$ | `systems.rs` |
+| Schwarzschild periapsis advance | Same orbit | 2.784 rad per orbit, equal between orbits to $8.4 \times 10^{-13}$ | $10^{-11}$ | `systems.rs` |
+| Photon sphere | Tangential ray at $1.5\,r_s$ and at $\pm 10^{-6}$ | radial acceleration $1.5 \times 10^{-16}$; inside falls in, outside escapes | $2 \times 10^{-15}$ | `systems.rs` |
+| Kapitza pendulum | $a = 0.05$, $l = 1$, from $\pi + 0.08$, 500 drive periods | ratio 2: stays within 0.080 rad<br>ratio 0.5: falls | < 0.1<br>> 1 | `systems.rs` |
+| Kepler Cartesian acceleration vs $-\mu \hat{r}/r^2$ | Through `SceneMap`, 200 mid-step samples, tight | $5.9 \times 10^{-10}$ ($4.1 \times 10^{-10}$ on `libm`) | $10^{-8}$ | `systems.rs` |
+| Damped cart-pole: energy lost vs friction work | $t \in [0, 6]$, tight | $1.1 \times 10^{-13}$ | $2 \times 10^{-12}$ | `systems.rs` |
+
+What the implementation established beyond the prototype:
+- **A segment's start is the solver's knot bit for bit** once the polynomial is stored in powers of the time since the start of the step. Stored in the normalized variable, the starting velocity came back one rounding off, and two tests that compared knots exactly caught it.
+- **Cyclic momenta are conserved exactly**, with the momentum update written as $p + h\,(\nabla_q L + Q)$. The prototype's $4.5 \times 10^{-14}$ after $10^4$ steps was a random walk of Newton residuals that this form does not have.
+- **`serde_json` does not round-trip an `f64` exactly by default.** Its `float_roundtrip` feature is needed for a trajectory to come back bit for bit.
+- **A blow-up is reported, not hung on.** $\ddot{q} = q^3$ from $q = \dot{q} = 1$ reaches infinity at $t = 1.3110$; `Dopri5` stops there with `StepSizeUnderflow` after 1014 steps.
+
+- **The suite was seen to fail.** A one-off sweep of 20 single-line faults (a dropped guard, a wrong stage, a wrong seed, a skipped check, across the AD types, engine, solvers, segment, trajectory and serde code) was run by hand. Eighteen were caught at once. The two that were not exposed real gaps, now closed by `the_start_is_the_knot_bit_for_bit` and by serde cases for a backward segment that is wrong in no other way. All 20 are caught now. The sweep is not a CI gate.
+
+Not measured: speed. No benchmark exists yet, and nothing in the README is a claim about performance.
+
+### 7.2 The prototype (2026-11-25, before any Rust)
+
+A pure-Python prototype with hand-derived equations of motion and a plain integral step controller was used to test the first plan's thresholds before writing the crate. `atol = rtol / 100`.
+
+| Case | Prototype measured |
+| --- | --- |
+| Double pendulum energy, `Dopri5`, $t \in [0, 20]$ | `rtol=1e-10`: knots $5.0 \times 10^{-10}$, mid-step $5.6 \times 10^{-9}$<br>`rtol=1e-12`: knots $2.5 \times 10^{-12}$, mid-step $5.7 \times 10^{-11}$ |
+| Pendulum period | `rtol=1e-9`: $1.6 \times 10^{-9}$; `rtol=1e-12`: $1.5 \times 10^{-12}$ |
+| Coupled oscillator | `rtol=1e-9`: $1.8 \times 10^{-9}$; `rtol=1e-12`: $1.7 \times 10^{-12}$ |
+| Rotating hoop Jacobi integral | `rtol=1e-9`: $1.1 \times 10^{-8}$; `rtol=1e-12`: $1.1 \times 10^{-11}$ |
+| Kepler $p_\theta$, midpoint + Yoshida | Newton on $\Delta q$: $4.5 \times 10^{-14}$ at $10^4$ steps, $2.3 \times 10^{-12}$ at $10^6$<br>Newton on $q_{k+1}$: $8.5 \times 10^{-11}$, $3.9 \times 10^{-8}$ |
+
+What it established:
+- The first plan's targets were not reachable as written. Double pendulum drift below $10^{-10}$ at `rtol=1e-10` failed by 5× at knots and 56× mid-step. Period, oscillator and hoop targets failed at default tolerances by 160×, 18× and 1,000×.
+- Mid-step energy error is the interpolant's truncation error. Building the Hermite coefficients from the integrator's increments instead of differenced positions made no difference.
+- The implementation does better than the prototype at the same tolerance (double pendulum at tight: $8.3 \times 10^{-13}$ against $2.5 \times 10^{-12}$) because its step controller is the PI controller of Hairer, Nørsett and Wanner rather than a plain integral one.
+
+**Rule:** every limit in the suite is about 10× a measurement in §7.1. A change that moves a measurement updates this table in the same pull request. Never loosen a limit without recording the new measurement and the reason here.
 
 ---
 
 ## 8. Execution Phases
 
-- **Phase 1:** Workspace scaffold, sealed `Scalar`, AD (`Dual`, `Grad<N>`, `Taylor2`), `linalg`, AD oracle and LU tests.
-- **Phase 2:** Engine (`Lagrangian<N>`, `eom_terms`, `accelerations`, Legendre energy and momentum, `SceneMap`, `velocity_of`), `Segment<N>`, `Stepper`, `Dopri5`, `Trajectory<N>` (`Cursor`, `crossings`). **Milestone: owner publishes `0.0.1` to reserve the name.**
-- **Phase 3:** `Variational2` / `Variational4`, `Controlled<N, M>` and `linearize`, built-in systems, full physics verification suite, thresholds re-baselined into §7.
-- **Phase 4:** `benches`, `svg_showcase`, `ode_adapters`, `egui_playground` (native + WASM), flagship `README.md`.
-- **Phase 5:** `bevy_lagrangian`, then `v0.1.0`.
+- **Phase 1 — done:** Workspace scaffold, sealed `Scalar`, AD (`Dual`, `Grad<N>`, `Taylor2`), `linalg`, AD oracle and LU tests.
+- **Phase 2 — done:** Engine (`Lagrangian<N>`, `eom_terms`, `accelerations`, Legendre energy and momentum, `SceneMap`, `velocity_of`), `Segment<N>`, `Stepper`, `Dopri5`, `Trajectory<N>` (`Cursor`, `crossings`). **Milestone reached: the owner can publish `0.0.1` to reserve the name** (`docs/RELEASING.md`, "Bootstrapping").
+- **Phase 3 — done:** `Variational2` / `Variational4`, `Controlled<N, M>` and `linearize`, built-in systems, full physics verification suite, thresholds re-baselined into §7.1, `serde`.
+- **Phase 4 — partly done:** `svg_showcase` and the flagship `README.md` exist. **Not started:** `benches`, `ode_adapters`, `egui_playground` (native + WASM).
+- **Phase 5 — not started:** `bevy_lagrangian`, then `v0.1.0`.

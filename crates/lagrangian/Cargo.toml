@@ -40,5 +40,11 @@ serde = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json.workspace = true
 
+[[example]]
+name = "svg_showcase"
+# Writes files and formats strings: the one part of the package that needs
+# the standard library.
+required-features = ["std"]
+
 [lints]
 workspace = true
