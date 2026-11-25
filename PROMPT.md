@@ -4,6 +4,16 @@ You are a Principal Numerical Physicist and Rust Library Architect. Design and i
 
 Read `PLAN.md` first for positioning, scope and the measured baselines behind every numeric threshold below. Follow `CLAUDE.md` at all times.
 
+> **Status (2026-11-25).** `crates/lagrangian` is implemented through Phase 3, with `svg_showcase` and the README from Phase 4. What follows is the specification it was built from; where the implementation chose differently, it is listed here and the code and `CLAUDE.md` are authoritative.
+>
+> - **Thresholds are no longer provisional.** Every limit in the suite is about 10× a value measured on the implementation; `PLAN.md` §7.1 has the table. The provisional numbers in the verification section below are history.
+> - **Segments store their polynomial in powers of `t − t_k`**, not of the normalized `τ` used in §6's derivation, so that a segment's start is the knot exactly.
+> - **The variational momentum update is `p + h·(∇_q L + Q)`**, which conserves a cyclic momentum to the last bit (§5 writes it as `D₂L_d + (h/2)·Q`, equal once the step equation holds).
+> - **`SimConfig` setters are named `with_*`** (`with_tolerances`, `with_max_steps`, …), and `Stepper::refresh` exists beside `system_mut`.
+> - **`SimError` has a sixth variant, `InvalidConfig`**, and a matrix holding a `NaN` is reported as `NonFiniteState` rather than `SingularMassMatrix`.
+> - **`linearize_free`** is the name of the linearization for systems without inputs.
+> - **Not built yet:** `benches`, `examples/ode_adapters`, `examples/egui_playground`, `crates/bevy_lagrangian`.
+
 ## Core Philosophy & Non-Negotiable Constraints
 
 1. **Zero-Algebra UX:** Users never derive Euler-Lagrange equations, Jacobians, Coriolis terms, or mass matrices by hand. They implement one trait (`Lagrangian<const N: usize>`) with one required method (`lagrangian<S: Scalar>`).
