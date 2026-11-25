@@ -21,3 +21,11 @@ rules:
   dependabot-cooldown:
     ignore:
       - dependabot.yml
+
+  # crates.io links Trusted Publishing to a crate that already exists, so a
+  # crate's first publish cannot use it: 0.1.0 goes out with an API token.
+  # This entry leaves with the token (docs/RELEASING.md, "Moving to Trusted
+  # Publishing").
+  use-trusted-publishing:
+    ignore:
+      - release.yml

@@ -29,9 +29,11 @@ What the project does continuously, enforced by required CI on every change:
   credentials, the workflow token is read-only by default with write scopes
   granted per job, and inputs reach shell steps only via environment
   variables. Accepted findings are documented in `.github/zizmor.yml`.
-- **Release integrity**: releases re-run the full CI gates, and publishing
-  uses crates.io Trusted Publishing (short-lived OIDC tokens) rather than a
-  stored secret.
+- **Release integrity**: releases re-run the full CI gates before anything
+  is published. Publishing uses a crates.io API token held as a repository
+  secret, because a crate's first publish cannot use Trusted Publishing;
+  moving to short-lived OIDC tokens and deleting the secret is the next
+  step in `docs/RELEASING.md`.
 - **Provenance**: every commit requires a DCO sign-off, and CI rejects
   bot-authored commits except Dependabot's, which is exempt from the
   identity rule only: its messages are checked like any other

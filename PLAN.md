@@ -66,7 +66,7 @@ Readers will raise these, so name them first:
 - **`lagrange` was taken on 2026-06-25** by an empty `0.0.0` with no repository, described as "Massively parallel runtime for computing Lagrangian systems". Names in this space are being claimed.
 - Alternatives still free: `variational`, `symplectic`, `euler-lagrange`, `least-action`, `maupertuis`. Keep `lagrangian`: `symplectic` would misdescribe a crate whose default solver is DOPRI5, and `variational` is too broad.
 - **The word is overloaded.** Searching crates.io for "lagrangian" returns 87 crates led by optimization, video codecs and interpolation. The crate description and keywords must say "Lagrangian mechanics".
-- **Reserve by shipping.** Publish `0.0.1` as soon as Phase 2 passes verification (working engine and `Stepper`), not an empty placeholder and not as late as `v0.1.0`.
+- **Reserved by shipping.** The name was taken with a working release, `0.1.0` on 2026-11-25, holding the core crate through Phase 3, rather than with an empty placeholder.
 
 ---
 
@@ -196,7 +196,9 @@ Cargo does not build `examples/*.rs` placed at a virtual workspace root. A loose
 
 ---
 
-## 5. Launch Strategy (`v0.1.0`)
+## 5. Launch Strategy
+
+`0.1.0` was released with the core crate alone. The pillars below are what a public launch still needs; pillar 1's adapter examples, and all of pillars 2 and 3, are later releases.
 
 ### Three Launch Pillars
 1. **An engine anyone can call.** Core is `no_std`, `wasm32`-friendly and renderer-agnostic. `ode_adapters` proves it works as the right-hand side for `ode_solvers` and `diffsol`.
@@ -327,7 +329,9 @@ What it established:
 ## 8. Execution Phases
 
 - **Phase 1 — done:** Workspace scaffold, sealed `Scalar`, AD (`Dual`, `Grad<N>`, `Taylor2`), `linalg`, AD oracle and LU tests.
-- **Phase 2 — done:** Engine (`Lagrangian<N>`, `eom_terms`, `accelerations`, Legendre energy and momentum, `SceneMap`, `velocity_of`), `Segment<N>`, `Stepper`, `Dopri5`, `Trajectory<N>` (`Cursor`, `crossings`). **Milestone reached: the owner can publish `0.0.1` to reserve the name** (`docs/RELEASING.md`, "Bootstrapping").
+- **Phase 2 — done:** Engine (`Lagrangian<N>`, `eom_terms`, `accelerations`, Legendre energy and momentum, `SceneMap`, `velocity_of`), `Segment<N>`, `Stepper`, `Dopri5`, `Trajectory<N>` (`Cursor`, `crossings`). **Released as part of `0.1.0`.**
 - **Phase 3 — done:** `Variational2` / `Variational4`, `Controlled<N, M>` and `linearize`, built-in systems, full physics verification suite, thresholds re-baselined into §7.1, `serde`.
 - **Phase 4 — partly done:** `svg_showcase` and the flagship `README.md` exist. **Not started:** `benches`, `ode_adapters`, `egui_playground` (native + WASM).
-- **Phase 5 — not started:** `bevy_lagrangian`, then `v0.1.0`.
+- **Phase 5 — not started:** `bevy_lagrangian`.
+
+`0.1.0` (2026-11-25) is Phases 1 to 3 with `svg_showcase` and the README. Phases 4 and 5 ship in later `0.x` releases.

@@ -141,6 +141,7 @@ another at merge — so write both as Conventional Commits. Update
 
 ## Releasing
 
-Tag `vX.Y.Z` on `main`; `release.yml` gates, publishes via Trusted
-Publishing, and cuts the GitHub Release. Publishing is the maintainer's
-action, never an agent's. See `docs/RELEASING.md`.
+Tag `vX.Y.Z` on `main`; `release.yml` gates, publishes to crates.io, and
+cuts the GitHub Release. A published version cannot be taken back, so a
+release is cut only when the maintainer asks for that release. See
+`docs/RELEASING.md`.

@@ -7,7 +7,7 @@ Built on the engine: a streaming `Stepper`, adaptive (`Dopri5`) and variational 
 
 `PLAN.md` holds the positioning, roadmap and measured baselines. `PROMPT.md` holds the implementation specification. **[AGENTS.md](AGENTS.md)** is the brief on layout, commands and house rules for every coding agent, and `CONTRIBUTING.md` is the full contributor document; this file holds the architectural rules and the mathematical invariants, and nothing here is repeated there.
 
-The short version of the house rules: Conventional Commits, `git commit -s` for the DCO, and **no AI attribution in the history** — you are welcome to use AI here, but the human opening the pull request is the author of record. Publishing to crates.io is the maintainer's action, never an agent's.
+The short version of the house rules: Conventional Commits, `git commit -s` for the DCO, and **no AI attribution in the history** — you are welcome to use AI here, but the human opening the pull request is the author of record. A published version cannot be taken back: cut a release only when the maintainer asks for that release.
 
 ## Workspace Layout
 - `crates/lagrangian` — Core library (`#![no_std]`, `#![forbid(unsafe_code)]`; `alloc` is an optional feature). `tests/` is the physics verification suite. `README.md` and the two `LICENSE-*` files in it are symlinks to the repository root so the published crate carries them.

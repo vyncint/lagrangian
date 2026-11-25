@@ -9,7 +9,7 @@ resolver = "3"
 members = ["crates/lagrangian"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 # Minimum supported Rust version. Checked by the `msrv` CI job, which reads
 # this field; bumping it is a minor (not patch) change per our SemVer policy.

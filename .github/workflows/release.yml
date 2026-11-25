@@ -54,12 +54,11 @@ jobs:
     name: publish to crates.io
     needs: ci
     runs-on: ubuntu-latest
-    # The `release` environment only deploys from v* tags, so an OIDC
-    # publish token can never be minted from a branch.
+    # The `release` environment is what the publish runs in, so that it can
+    # be restricted to v* tags and a token can never be used from a branch.
     environment: release
     permissions:
       contents: read
-      id-token: write # crates.io Trusted Publishing (GitHub OIDC)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,16 +66,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
-      # Auth is crates.io Trusted Publishing: the action exchanges this
-      # job's OIDC token for a short-lived publish token, so no secret is
-      # stored on the repository. It needs the crate to exist and to be
-      # linked to this workflow first; docs/RELEASING.md, "Bootstrapping",
-      # covers the very first publish, which cannot come through here.
-      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
-        id: auth
+      # Auth is a crates.io API token held as the CARGO_REGISTRY_TOKEN
+      # secret. A crate's first publish has no crate to link Trusted
+      # Publishing to, so 0.1.0 has to go out this way. docs/RELEASING.md,
+      # "Moving to Trusted Publishing", has the steps that replace this
+      # step with a short-lived OIDC token and let the secret be deleted.
       - run: cargo publish -p lagrangian --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   github-release:
     name: GitHub release
