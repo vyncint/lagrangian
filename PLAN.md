@@ -276,6 +276,16 @@ cargo test -p lagrangian --release -- --nocapture | grep '^measured'
 | Kapitza pendulum | $a = 0.05$, $l = 1$, from $\pi + 0.08$, 500 drive periods | ratio 2: stays within 0.080 rad<br>ratio 0.5: falls | < 0.1<br>> 1 | `systems.rs` |
 | Kepler Cartesian acceleration vs $-\mu \hat{r}/r^2$ | Through `SceneMap`, 200 mid-step samples, tight | $5.9 \times 10^{-10}$ ($4.1 \times 10^{-10}$ on `libm`) | $10^{-8}$ | `systems.rs` |
 | Damped cart-pole: energy lost vs friction work | $t \in [0, 6]$, tight | $1.1 \times 10^{-13}$ | $2 \times 10^{-12}$ | `systems.rs` |
+| Damped oscillator vs closed form | $\omega = 3$, $\zeta = 0.15$, friction as a generalized force, $t = 6$ | default $1.3 \times 10^{-10}$<br>tight $1.3 \times 10^{-13}$<br>`Variational4`, $dt = 0.01$: $1.9 \times 10^{-7}$<br>`Variational2`: $2.3 \times 10^{-4}$ | $2 \times 10^{-9}$<br>$2 \times 10^{-12}$<br>$2 \times 10^{-6}$<br>$3 \times 10^{-3}$ | `forces.rs` |
+| Order of the variational solvers with friction | Same oscillator, error ratio on halving $dt$ | 3.997 and 15.85 | 3.6–4.4 and 13–19 | `forces.rs` |
+| Driven oscillator vs closed form | $\omega_0 = 2$, $F = 1.5$, $\Omega = 3.1$, $t = 9$; drive as a force and inside $L$ | tight $5.8 \times 10^{-13}$<br>`Variational4`: $6.3 \times 10^{-8}$<br>`Variational2`: $1.9 \times 10^{-4}$<br>the two formulations: $1.2 \times 10^{-15}$ | $6 \times 10^{-12}$<br>$7 \times 10^{-7}$<br>$2 \times 10^{-3}$<br>$2 \times 10^{-14}$ | `forces.rs` |
+| Charge in a magnetic field, 10 turns | $m = 0.7$, $q = 1.3$, $B = 2.1$, $v = 1.9$, symmetric gauge | tight: position $2.7 \times 10^{-12}$, velocity $1.1 \times 10^{-11}$, speed $5.6 \times 10^{-12}$<br>`Variational4`, $dt = 0.005$: position $2.9 \times 10^{-7}$, speed $2.8 \times 10^{-15}$ | $3 \times 10^{-11}$, $2 \times 10^{-10}$, $6 \times 10^{-11}$<br>$3 \times 10^{-6}$, $5 \times 10^{-14}$ | `forces.rs` |
+| Same, Landau gauge: conserved $p_x$ | `Variational4`, 5000 steps | exactly 0 | $5 \times 10^{-15}$ | `forces.rs` |
+| Chains of 1 and 2 links vs hand-expanded Lagrangians | Positions through `velocity_of`, 40 random states | $2.0 \times 10^{-15}$ | $3 \times 10^{-14}$ | `chains.rs` |
+| Engine vs oracle, chains of 3, 5 and 8 links | Uneven masses and lengths, 20 random states each, moving and at rest | $1.4 \times 10^{-14}$, $2.8 \times 10^{-14}$, $1.7 \times 10^{-13}$ | $2 \times 10^{-13}$, $3 \times 10^{-13}$, $2 \times 10^{-12}$ | `chains.rs` |
+| Chain energy, `Dopri5` | Released from horizontal, $t \in [0, 3]$, tight | 3 links: $9.6 \times 10^{-14}$<br>5 links: $5.6 \times 10^{-14}$ | $10^{-12}$ | `chains.rs` |
+| Chain energy band, `Variational4` | Same start, $dt = 0.002$, 400 steps | 3 links: $1.2 \times 10^{-9}$<br>5 links: $1.4 \times 10^{-9}$ | $1.5 \times 10^{-8}$ | `chains.rs` |
+| Hanging chain: $M a_q$ vs $-K$ | 3 and 5 links | $8.7 \times 10^{-16}$, $1.2 \times 10^{-15}$ | $2 \times 10^{-14}$ | `chains.rs` |
 
 What the implementation established beyond the prototype:
 - **A segment's start is the solver's knot bit for bit** once the polynomial is stored in powers of the time since the start of the step. Stored in the normalized variable, the starting velocity came back one rounding off, and two tests that compared knots exactly caught it.
@@ -284,6 +294,12 @@ What the implementation established beyond the prototype:
 - **A blow-up is reported, not hung on.** $\ddot{q} = q^3$ from $q = \dot{q} = 1$ reaches infinity at $t = 1.3110$; `Dopri5` stops there with `StepSizeUnderflow` after 1014 steps.
 
 - **The suite was seen to fail.** A one-off sweep of 20 single-line faults (a dropped guard, a wrong stage, a wrong seed, a skipped check, across the AD types, engine, solvers, segment, trajectory and serde code) was run by hand. Eighteen were caught at once. The two that were not exposed real gaps, now closed by `the_start_is_the_knot_bit_for_bit` and by serde cases for a backward segment that is wrong in no other way. All 20 are caught now. The sweep is not a CI gate.
+
+Checked once by hand before the first release, on the packaged tarball rather than the working tree. None of these is a CI gate:
+- **The packaged crate tests itself outside the workspace:** 118 tests with every feature, 66 with no allocator.
+- **A `no_std`, no-allocator binary links for `thumbv7em-none-eabihf`:** steppers of both families, the 4×4 indefinite solve and a linearization, 90 KiB of ELF, with `lagrangian` and `libm` as its only dependencies. CI checks that target with `cargo check`, which generates no code and links nothing.
+- **A `wasm32-unknown-unknown` module has no imports**, is 70 KiB, and run in V8 reproduces the native figures: double pendulum energy drift $8.3 \times 10^{-13}$ at tight tolerances and Kepler $p_\theta$ drift $3.7 \times 10^{-16}$.
+- **The beta (1.101) and nightly (1.102) compilers** lint the workspace clean, pass all 118 tests and build the documentation.
 
 Not measured: speed. No benchmark exists yet, and nothing in the README is a claim about performance.
 
