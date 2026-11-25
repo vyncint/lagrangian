@@ -99,6 +99,22 @@ fn sampling_is_clamped_and_the_ends_are_exact() {
 }
 
 #[test]
+fn a_time_that_is_not_a_number_is_not_a_panic() {
+    let traj = chaotic(&SimConfig::default());
+    let lost = traj.sample(f64::NAN);
+    assert!(lost.t.is_nan() && lost.q[0].is_nan());
+    let mut cursor = Cursor::default();
+    assert!(traj.sample_with_cursor(f64::NAN, &mut cursor).q[0].is_nan());
+    // The cursor is still usable afterwards.
+    assert_eq!(traj.sample_with_cursor(3.0, &mut cursor), traj.sample(3.0));
+    // An indicator that is NaN everywhere crosses nothing.
+    assert!(
+        traj.crossings(|_| f64::NAN, CrossingDirection::Either)
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_cursor_gives_the_same_answer_as_a_search() {
     let traj = chaotic(&SimConfig::default());
     let mut cursor = Cursor::default();
@@ -318,6 +334,12 @@ fn two_crossings_inside_one_step_are_both_found() {
     assert!(traj.crossings(narrow, CrossingDirection::Either).is_empty());
     assert_eq!(
         traj.crossings_with(narrow, CrossingDirection::Either, 99)
+            .len(),
+        2
+    );
+    // Many more points than needed find the same two, once each.
+    assert_eq!(
+        traj.crossings_with(narrow, CrossingDirection::Either, 100_000)
             .len(),
         2
     );

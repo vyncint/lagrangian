@@ -2,6 +2,8 @@
 //! systems simple enough to have closed-form solutions.
 #![allow(dead_code)]
 
+use lagrangian::EomTerms;
+use lagrangian::ad::{Dual, HyperDual};
 use lagrangian::prelude::*;
 
 /// A small deterministic generator: the suite must not depend on a crate,
@@ -113,4 +115,100 @@ pub(crate) fn sci(values: &[f64]) -> String {
         .map(|x| format!("{x:.2e}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// A hyperdual seed: the value, whether it is the inner variable, whether it
+/// is the outer variable.
+pub(crate) fn seed(value: f64, inner: bool, outer: bool) -> HyperDual {
+    let one = |on: bool| if on { 1.0 } else { 0.0 };
+    Dual::new(Dual::new(value, one(inner)), Dual::new(one(outer), 0.0))
+}
+
+/// Every term of the equations of motion, element by element: one hyperdual
+/// evaluation per second derivative.
+pub(crate) fn oracle<L: Lagrangian<N>, const N: usize>(
+    sys: &L,
+    q: [f64; N],
+    dq: [f64; N],
+    t: f64,
+) -> EomTerms<N> {
+    // The Lagrangian with coordinate `a` of the velocities as the inner
+    // variable and one of (velocity b, coordinate b, time) as the outer.
+    let eval = |a: usize, outer_dq: Option<usize>, outer_q: Option<usize>, outer_t: bool| {
+        sys.lagrangian(
+            core::array::from_fn(|i| seed(q[i], false, outer_q == Some(i))),
+            core::array::from_fn(|i| seed(dq[i], i == a, outer_dq == Some(i))),
+            seed(t, false, outer_t),
+        )
+    };
+
+    let mut terms = EomTerms {
+        lagrangian: sys.lagrangian(q, dq, t),
+        mass: [[0.0; N]; N],
+        grad_q: [0.0; N],
+        momentum: [0.0; N],
+        convective: [0.0; N],
+        force: sys.generalized_force(q, dq, t),
+        dl_dt: 0.0,
+    };
+    for i in 0..N {
+        for j in 0..N {
+            terms.mass[i][j] = eval(i, Some(j), None, false).eps.eps;
+            terms.convective[i] += eval(i, None, Some(j), false).eps.eps * dq[j];
+        }
+        let by_time = eval(i, None, None, true);
+        terms.convective[i] += by_time.eps.eps;
+        terms.momentum[i] = by_time.val.eps;
+        terms.dl_dt = by_time.eps.val;
+        terms.grad_q[i] = eval(0, None, Some(i), false).eps.val;
+    }
+    terms
+}
+
+/// The largest relative difference between the engine and the oracle.
+pub(crate) fn mismatch<L: Lagrangian<N>, const N: usize>(
+    sys: &L,
+    q: [f64; N],
+    dq: [f64; N],
+    t: f64,
+) -> f64 {
+    let engine = eom_terms(sys, q, dq, t);
+    let reference = oracle(sys, q, dq, t);
+    let mut worst =
+        rel(engine.lagrangian, reference.lagrangian).max(rel(engine.dl_dt, reference.dl_dt));
+    for i in 0..N {
+        worst = worst
+            .max(rel(engine.grad_q[i], reference.grad_q[i]))
+            .max(rel(engine.momentum[i], reference.momentum[i]))
+            .max(rel(engine.convective[i], reference.convective[i]))
+            .max(rel(engine.force[i], reference.force[i]));
+        for j in 0..N {
+            worst = worst.max(rel(engine.mass[i][j], reference.mass[i][j]));
+            assert_eq!(
+                engine.mass[i][j], engine.mass[j][i],
+                "the mass matrix is symmetric"
+            );
+        }
+    }
+    assert!(
+        worst.is_finite(),
+        "a term is not finite at q = {q:?}, dq = {dq:?}"
+    );
+    worst
+}
+
+/// The state at `t_end`, by stepping: no trajectory and no allocation, so
+/// the suites that use it also run in the build without an allocator.
+pub(crate) fn advance<L: Lagrangian<N>, const N: usize>(
+    sys: &L,
+    q0: [f64; N],
+    dq0: [f64; N],
+    t_end: f64,
+    config: SimConfig,
+) -> State<N> {
+    let mut stepper = Stepper::new(sys, 0.0, q0, dq0, config).expect("a valid start");
+    while stepper.state().t < t_end {
+        stepper.step_bounded(t_end).expect("a step");
+    }
+    stepper.state()
 }
