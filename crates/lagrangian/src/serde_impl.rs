@@ -13,9 +13,11 @@
 //! coefficient can come back one ulp off.
 //!
 //! Deserialization checks what the rest of the crate relies on without
-//! checking: a segment runs forward in time, and the segments of a
-//! trajectory are contiguous. A file that breaks either is refused rather
-//! than sampled.
+//! checking, and refuses a file that breaks it rather than sampling it
+//! (#8): a segment runs forward for a finite time, its polynomial stays
+//! finite between its ends, a trajectory's initial state is finite, and its
+//! segments are contiguous. Data a solver could never have produced, and
+//! that would sample to `NaN` or overflow, does not get through.
 
 use core::fmt;
 
@@ -253,17 +255,14 @@ impl<'de, const N: usize> Deserialize<'de> for Segment<N> {
         struct SegmentVisitor<const N: usize>;
 
         impl<const N: usize> SegmentVisitor<N> {
-            /// Sampling divides by the duration, so it must be positive.
+            /// The same checks as `Trajectory::push`: a finite, positive
+            /// duration, and a polynomial that cannot overflow inside.
             fn build<E: de::Error>(t0: f64, t1: f64, c: [[f64; 6]; N]) -> Result<Segment<N>, E> {
-                if t1.partial_cmp(&t0) != Some(core::cmp::Ordering::Greater)
-                    || !t0.is_finite()
-                    || !t1.is_finite()
-                {
-                    return Err(de::Error::custom(
-                        "a segment must run forward in time: t1 must be after t0, and both finite",
-                    ));
+                let segment = Segment { t0, t1, c };
+                match segment.defect() {
+                    Some(reason) => Err(de::Error::custom(reason)),
+                    None => Ok(segment),
                 }
-                Ok(Segment { t0, t1, c })
             }
         }
 
@@ -330,6 +329,11 @@ mod trajectory {
             initial: State<N>,
             segments: Vec<Segment<N>>,
         ) -> Result<Trajectory<N>, E> {
+            if !initial.is_finite() {
+                return Err(de::Error::custom(
+                    "a trajectory's initial state must be finite",
+                ));
+            }
             let mut end = initial.t;
             for segment in &segments {
                 if segment.t0 != end {

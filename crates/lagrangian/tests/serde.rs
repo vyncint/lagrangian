@@ -171,3 +171,131 @@ fn data_that_would_break_sampling_is_refused() {
     let two: Result<Trajectory<2>, _> = serde_json::from_str(&good);
     assert!(two.is_err());
 }
+
+#[test]
+fn data_that_would_overflow_inside_a_segment_is_refused() {
+    // 0.1.0 accepted both and sampled them to NaN (#8).
+    let refuse = |json: &str, what: &str| {
+        let result: Result<Trajectory<1>, _> = serde_json::from_str(json);
+        let error = result.expect_err(what).to_string();
+        assert!(error.contains("segment"), "{what}: {error}");
+    };
+    let from = |t0: &str, t1: &str, row: &str| {
+        format!(
+            r#"{{"initial":{{"t":{t0},"q":[0.0],"dq":[0.0],"ddq":[0.0]}},"segments":[{{"t0":{t0},"t1":{t1},"c":[{row}]}}]}}"#
+        )
+    };
+    let zeros = "[0.0,0.0,0.0,0.0,0.0,0.0]";
+    refuse(&from("-1e308", "1e308", zeros), "a duration that overflows");
+    refuse(
+        &from("0.0", "1e10", "[0.0,0.0,0.0,0.0,0.0,1e300]"),
+        "a position that overflows inside the segment",
+    );
+    refuse(
+        &from("0.0", "10.0", "[0.0,1e308,0.0,0.0,0.0,0.0]"),
+        "a velocity that carries the position past the largest float",
+    );
+    refuse(
+        &from("0.0", "1e100", "[0.0,0.0,0.0,1e100,0.0,0.0]"),
+        "an acceleration that overflows",
+    );
+    // Large but representable everywhere inside is fine.
+    let big: Trajectory<1> =
+        serde_json::from_str(&from("0.0", "1.0", "[1e300,1e300,0.0,0.0,0.0,0.0]")).unwrap();
+    assert!(big.sample(0.5).is_finite());
+
+    let alone: Result<Segment<1>, _> =
+        serde_json::from_str(r#"{"t0":-1e308,"t1":1e308,"c":[[0.0,0.0,0.0,0.0,0.0,0.0]]}"#);
+    assert!(alone.is_err());
+}
+
+#[test]
+fn a_trajectory_starts_where_its_first_segment_does() {
+    // An initial state that disagrees with the first segment: 0.1.0's
+    // sample(0) reported the one and sample(1e-12) the other (#8). The
+    // first segment wins, and the file still round-trips unchanged.
+    let json = r#"{"initial":{"t":0.0,"q":[5.0],"dq":[5.0],"ddq":[5.0]},
+                   "segments":[{"t0":0.0,"t1":1.0,"c":[[0.0,1.0,0.0,0.0,0.0,0.0]]}]}"#;
+    let traj: Trajectory<1> = serde_json::from_str(json).unwrap();
+    let first = traj.segments()[0].start();
+    assert_eq!(first.q, [0.0]);
+    assert_eq!(traj.start(), first);
+    assert_eq!(traj.sample(0.0), first);
+    assert_eq!(traj.sample(-1.0), first);
+    assert_eq!(traj.knots().next(), Some(first));
+    assert!((traj.sample(1e-12).q[0] - 1e-12).abs() < 1e-24);
+    let back: Trajectory<1> = serde_json::from_str(&serde_json::to_string(&traj).unwrap()).unwrap();
+    assert_eq!(back, traj);
+}
+
+/// Replaces the `k`-th number met in a depth-first walk; `false` if there
+/// are not that many.
+fn replace_nth(value: &mut serde_json::Value, k: &mut usize, with: f64) -> bool {
+    use serde_json::Value;
+    match value {
+        Value::Number(_) => {
+            if *k == 0 {
+                *value = serde_json::json!(with);
+                return true;
+            }
+            *k -= 1;
+            false
+        }
+        Value::Array(items) => items.iter_mut().any(|x| replace_nth(x, k, with)),
+        Value::Object(fields) => fields.values_mut().any(|x| replace_nth(x, k, with)),
+        _ => false,
+    }
+}
+
+#[test]
+fn no_single_number_can_make_a_valid_file_sample_to_nan() {
+    // Every number of a real trajectory replaced in turn by values far out
+    // of range: whatever is still accepted is finite everywhere inside. In
+    // 0.1.0 about 0.3% of randomly mutated files were accepted and sampled
+    // to inf or NaN (#8).
+    let traj = simulate(
+        &DoublePendulum::default(),
+        (0.0, 0.2),
+        [2.2, 2.8],
+        [0.0, 0.0],
+        &SimConfig::default(),
+    )
+    .unwrap();
+    let original = serde_json::to_value(&traj).unwrap();
+    let (mut tried, mut accepted) = (0, 0);
+    for k in 0.. {
+        let mut done = false;
+        for with in [
+            1e308, -1e308, 1e300, 1e154, -1e154, 1e-300, 5e-324, 0.0, 3.0,
+        ] {
+            let mut value = original.clone();
+            if !replace_nth(&mut value, &mut k.clone(), with) {
+                done = true;
+                break;
+            }
+            tried += 1;
+            let Ok(read) = serde_json::from_value::<Trajectory<2>>(value) else {
+                continue;
+            };
+            accepted += 1;
+            for segment in read.segments() {
+                for tau in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    assert!(segment.eval(tau).is_finite(), "number {k} set to {with:e}");
+                }
+            }
+            let (t0, span) = (read.t_start(), read.duration());
+            for i in 0..=40 {
+                let s = read.sample(t0 + span * f64::from(i) / 40.0);
+                assert!(s.is_finite(), "number {k} set to {with:e}");
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    // Most replacements land in a coefficient and are harmless.
+    assert!(
+        tried > 1000 && accepted > tried / 2,
+        "{accepted} of {tried} accepted"
+    );
+}

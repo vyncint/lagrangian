@@ -28,7 +28,8 @@ use crate::ad::{Dual, Grad};
 use crate::error::SimError;
 use crate::linalg;
 use crate::mechanics::{
-    Lagrangian, NewtonMonitor, accelerations, max_abs, solve_failure, velocity_from_momentum,
+    Lagrangian, NewtonMonitor, accelerations, max_abs, momentum, solve_failure,
+    velocity_from_momentum,
 };
 use crate::segment::{Segment, State};
 
@@ -58,28 +59,61 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
         _ => (natural_end, false),
     };
     let h = end_t - start.t;
-
-    let weights: &[f64] = if fourth_order { &[W1, W0, W1] } else { &[1.0] };
-    let (mut q, mut p, mut t) = (start.q, s.p, start.t);
-    let mut velocity = start.dq;
-    for &w in weights {
-        let sub = w * h;
-        let next = discrete_step(&s.sys, q, p, t, sub, velocity)?;
-        (q, p, t, velocity) = (next.q, next.p, t + sub, next.velocity);
+    if h.partial_cmp(&0.0) != Some(core::cmp::Ordering::Greater) {
+        // `dt` is below the resolution of the clock at this time.
+        return Err(SimError::StepSizeUnderflow { t: start.t });
     }
 
-    // The knot needs a velocity and an acceleration; the integrator carries
-    // a momentum. The inverse Legendre transform recovers the first, and the
-    // equations of motion give the second.
-    let dq = velocity_from_momentum(&s.sys, q, p, end_t, velocity)?;
-    let ddq = accelerations(&s.sys, q, dq, end_t)?;
-    let end = State {
-        t: end_t,
-        q,
-        dq,
-        ddq,
+    let (end, p, increment, inc_dq) = if h <= TAYLOR_STEP {
+        let increment: [f64; N] = from_fn(|i| h * (start.dq[i] + 0.5 * h * start.ddq[i]));
+        let inc_dq: [f64; N] = from_fn(|i| h * start.ddq[i]);
+        let q = from_fn(|i| start.q[i] + increment[i]);
+        let dq = from_fn(|i| start.dq[i] + inc_dq[i]);
+        let ddq = accelerations(&s.sys, q, dq, end_t)?;
+        let end = State {
+            t: end_t,
+            q,
+            dq,
+            ddq,
+        };
+        (end, momentum(&s.sys, q, dq, end_t), increment, inc_dq)
+    } else {
+        let weights: &[f64] = if fourth_order { &[W1, W0, W1] } else { &[1.0] };
+        let (mut q, mut p, mut t) = (start.q, s.p, start.t);
+        let mut velocity = start.dq;
+        // The whole step's position increment, summed from the substeps'
+        // own: the segment is built from it, and the knot is the start plus
+        // it, so the two agree to one rounding.
+        let mut increment = [0.0; N];
+        for &w in weights {
+            let sub = w * h;
+            let next = discrete_step(&s.sys, q, p, t, sub, velocity)?;
+            for i in 0..N {
+                increment[i] += next.increment[i];
+            }
+            (q, p, t, velocity) = (next.q, next.p, t + sub, next.velocity);
+        }
+        let q: [f64; N] = from_fn(|i| start.q[i] + increment[i]);
+
+        // The knot needs a velocity and an acceleration; the integrator
+        // carries a momentum. The inverse Legendre transform recovers the
+        // first, and the equations of motion give the second.
+        let dq = velocity_from_momentum(&s.sys, q, p, end_t, velocity)?;
+        let ddq = accelerations(&s.sys, q, dq, end_t)?;
+        let end = State {
+            t: end_t,
+            q,
+            dq,
+            ddq,
+        };
+        let inc_dq: [f64; N] = from_fn(|i| end.dq[i] - start.dq[i]);
+        (end, p, increment, inc_dq)
     };
     if !end.is_finite() {
+        return Err(SimError::NonFiniteState { t: start.t });
+    }
+    let segment = Segment::from_step(&start, &end, &increment, &inc_dq);
+    if segment.defect().is_some() {
         return Err(SimError::NonFiniteState { t: start.t });
     }
 
@@ -92,12 +126,23 @@ pub(super) fn step<L: Lagrangian<N>, const N: usize>(
     }
     s.state = end;
     s.p = p;
-    Ok(Segment::from_knots(&start, &end))
+    Ok(segment)
 }
+
+/// The longest step taken as an explicit Taylor step instead of a
+/// variational one: a landing step a few ulps long, or a `dt` far below any
+/// physical time scale. Newton divides by the step, `1/h` overflows below
+/// `h ≈ 5.6e-309`, and 0.1.0 returned an error or a wrong segment for such
+/// steps (#7). The Taylor step's own error, `h³·q⃛/6 ≈ 7e-45·q⃛`, is far
+/// below the rounding of any state. At `|t| ≥ 16` no step the clock can
+/// resolve is this short, so every step there is variational.
+const TAYLOR_STEP: f64 = 16.0 * f64::EPSILON;
 
 /// Where one midpoint step ends.
 struct Substep<const N: usize> {
     q: [f64; N],
+    /// `q − q₀`, as solved for: not a difference of rounded positions.
+    increment: [f64; N],
     p: [f64; N],
     /// The mean velocity over the step: the guess for the next one.
     velocity: [f64; N],
@@ -150,6 +195,7 @@ fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
             // rounding.
             return Ok(Substep {
                 q: from_fn(|i| q[i] + d[i]),
+                increment: d,
                 p: from_fn(|i| p[i] + h * r.force[i]),
                 velocity: d.map(|x| x / h),
             });

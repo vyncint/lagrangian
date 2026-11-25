@@ -178,12 +178,12 @@ Every number below is reproduced by a test that runs in CI, on the platform's ma
 | Period of a pendulum swinging to 2.4 rad against the elliptic integral | 1.2e-9 default, 1.1e-12 tight | [`analytic.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/analytic.rs) |
 | Energy of a chaotic double pendulum, Dormand-Prince, `t ∈ [0, 20]`, at the ends of steps | 3.4e-9 default, 8.3e-13 tight | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | The same, sampled between the ends of steps | 1.7e-8 default, 1.9e-11 tight | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
-| Energy of the same pendulum, 4th-order variational, `dt = 0.005`, 10⁴ steps | within 2.2e-5, no growth | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
+| Energy of the same pendulum, 4th-order variational, `dt = 0.005`, 10⁴ steps | within 2.1e-5, no growth | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | Angular momentum of a Kepler orbit, 4th-order variational, 10⁴ steps | 3.7e-16 (rounding) | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | The same with Dormand-Prince, tight, `t ∈ [0, 200]` | 2.5e-12 | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
-| Jump across a step boundary in position / velocity / acceleration | 1.4e-17 / 2.6e-16 / 2.2e-14 | [`trajectory.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/trajectory.rs) |
-| Cart-pole linearization against its closed form | 4.8e-16 | [`control.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/control.rs) |
-| Speed of a charge in a magnetic field after ten turns | 5.6e-12 Dormand-Prince tight, 2.8e-15 variational | [`forces.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/forces.rs) |
+| Jump across a step boundary in position / velocity / acceleration | 2.2e-16 / 2.2e-16 / 3.3e-14 | [`trajectory.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/trajectory.rs) |
+| Cart-pole linearization against its closed form | 6.7e-16 | [`control.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/control.rs) |
+| Speed of a charge in a magnetic field after ten turns | 5.6e-12 Dormand-Prince tight, 5.8e-16 variational | [`forces.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/forces.rs) |
 | Damped and driven oscillators against their closed forms, 4th-order variational, `dt = 0.01` | 1.9e-7 and 6.3e-8 | [`forces.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/forces.rs) |
 | Engine against the oracle on chains of 3, 5 and 8 links | ≤ 1.7e-13 relative | [`chains.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/chains.rs) |
 | Energy and angular momentum of a precessing orbit around a black hole, proper time 2000, tight | 8.9e-13 and 3.1e-12 | [`systems.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/systems.rs) |
@@ -206,7 +206,7 @@ M(q, q̇, t) · q̈ = ∇_q L + Q − C        M_ij = ∂²L/∂q̇_i∂q̇_j
 
 - **Derivatives come from dual numbers**, not symbols and not finite differences. Your function is called with a number type that carries derivatives through every `+`, `*`, `sin` and `powi`. The types live on the stack and are `Copy`.
 - **The whole vector `C` is one directional derivative** of the momentum `∇_q̇ L` along `(q̇, 0, 1)`, so it costs one evaluation instead of one per entry. All terms together take `N + 2` evaluations. Each is `O(N)` wide, so the total grows as `N²`: a constant-factor saving, not a different order.
-- **`M` is solved with pivoted elimination**, never Cholesky. A mass matrix need not be positive definite: for a geodesic it is the metric, and a spacetime metric has a negative eigenvalue.
+- **`M` is solved with pivoted elimination**, never Cholesky. A mass matrix need not be positive definite: for a geodesic it is the metric, and a spacetime metric has a negative eigenvalue. Rows and columns are first scaled by powers of two, so a matrix whose entries span many orders of magnitude, like that metric just outside the horizon, is solved rather than called singular.
 - **Energy is the Jacobi integral `p·q̇ − L`**, which is what is conserved in a rotating frame or a magnetic field. `½q̇ᵀMq̇ + V` is wrong for both.
 - **Each step is stored as a quintic** matching position, velocity and acceleration at both ends, which is what makes the trajectory twice continuously differentiable.
 - **The variational integrator** discretizes the action rather than the equations, which makes it symplectic even when the mass matrix depends on `q`. A coordinate the Lagrangian does not depend on keeps its momentum to the last bit.

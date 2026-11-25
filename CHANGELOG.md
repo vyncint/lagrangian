@@ -10,6 +10,56 @@ heading, in a bullet that begins **Breaking:**.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Stepper::step` can no longer hang ([#4]). At rest the adaptive step grew
+  tenfold per step until it was infinite, and the next call never returned;
+  a step a few ulps short of a `step_bounded` target rounded back up to it
+  after every rejection; and a first-step estimate that overflowed became an
+  infinite step. The step is now capped at `f64::MAX`, landing is decided by
+  comparing lengths rather than rounded times, a call makes at most 1000
+  attempts, and a non-finite estimate falls back to a small step.
+- A very short step gives a correct segment ([#7]). Below `h ≈ 1e-64` the
+  segment was infinite or `NaN`, and a step a few ulps long reported
+  velocities off by order one inside it. Segments are now built from the
+  increments the solver added to the start knot, without forming powers of
+  `h`, and a short step is represented by the lower-degree polynomial that
+  still reaches its end to rounding. A variational step shorter than
+  `16 ε` is taken as an explicit Taylor step, where Newton would divide by
+  it.
+- `atan2` and `hypot` on the dual-number types kept a derivative of zero, or
+  lost it, for arguments below about `1e-154`, where squares underflow
+  ([#16]). Both are now scaled before anything is squared.
+- `linalg::solve`, and so `accelerations`, called invertible matrices
+  singular when their entries spanned more than about `7e13`: the
+  Schwarzschild metric within `1e-7·r_s` of the horizon, or a system that
+  mixes very different units ([#16]). Rows and columns are now equilibrated
+  by powers of two before elimination, which adds no rounding.
+- With the `serde` feature, reading a trajectory refuses data that would
+  sample to `NaN` or infinity: a duration that overflows, a polynomial that
+  overflows between the ends of its segment, or an initial state that is not
+  finite ([#8]). `Trajectory::push` holds a segment to the same rules.
+
+### Changed
+
+- `simulate` and `Trajectory::extend` refuse an end time that is not finite
+  with `InvalidConfig` ([#5]). An infinite one ran until `max_steps`, and a
+  `NaN` one returned at once having done nothing.
+- `Trajectory::crossings_with` looks at no more than 2¹⁶ points inside each
+  step, and `Trajectory::energy_drift` takes no more than 2²⁰ samples
+  ([#5]). `usize::MAX` used to mean a call that never returned.
+- `Trajectory::start` and the first of `Trajectory::knots` are where the
+  first segment starts, when there is one ([#8]). A file whose initial state
+  disagreed with its first segment sampled to one at its start time and to
+  the other just after it.
+- `Stepper::set_state` also resets the step size and the error history: the
+  next step is the one a new stepper would take from that state.
+- A fixed step too short for the clock to advance at the current time is
+  reported as `StepSizeUnderflow`. The message of that error no longer
+  mentions a tolerance.
+- The documentation of `SimConfig::max_steps` and `simulate` gives the memory
+  a call can hold, and SECURITY.md lists what bounds each resource ([#5]).
+
 ## [0.1.0] - 2026-11-25
 
 The first release: the core crate.
@@ -56,4 +106,9 @@ The first release: the core crate.
   SVG.
 
 [Unreleased]: https://github.com/vyncint/lagrangian/compare/v0.1.0...HEAD
+[#4]: https://github.com/vyncint/lagrangian/issues/4
+[#5]: https://github.com/vyncint/lagrangian/issues/5
+[#7]: https://github.com/vyncint/lagrangian/issues/7
+[#8]: https://github.com/vyncint/lagrangian/issues/8
+[#16]: https://github.com/vyncint/lagrangian/issues/16
 [0.1.0]: https://github.com/vyncint/lagrangian/releases/tag/v0.1.0

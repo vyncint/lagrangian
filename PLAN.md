@@ -258,7 +258,7 @@ cargo test -p lagrangian --release -- --nocapture | grep '^measured'
 | Same, five points inside each step | | default $1.7 \times 10^{-8}$<br>tight $1.9 \times 10^{-11}$ | $2 \times 10^{-7}$<br>$2 \times 10^{-10}$ | `energy.rs` |
 | Rotating hoop Jacobi integral | $R = 1$, $\Omega = 5$, $\theta_0 = 0.3$ at rest, $t \in [0, 20]$, tight | knots $8.1 \times 10^{-12}$<br>mid-step $9.0 \times 10^{-12}$ | $10^{-10}$ | `energy.rs` |
 | Rotating hoop tilted equilibrium | Acceleration at $\cos\theta^* = g/(R\Omega^2)$ | $1.8 \times 10^{-15}$ | $2 \times 10^{-14}$ | `energy.rs` |
-| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.2 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
+| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.1 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
 | Same, by quarter of the run | $dt = 0.005$ | $1.95, 1.91, 1.79, 1.84 \times 10^{-5}$ | last ≤ 2× first | `energy.rs` |
 | Kepler $p_\theta$, `Variational4` | $\mu = 1$, $r_0 = 1$, $\dot{\theta}_0 = 1.2$, $dt = 0.02$, $10^4$ steps | $3.7 \times 10^{-16}$ | $5 \times 10^{-15}$ | `energy.rs`, `stepper.rs` |
 | Same, $2 \times 10^5$ steps | Measured once, not a test | $5.6 \times 10^{-16}$ | | |
@@ -266,28 +266,36 @@ cargo test -p lagrangian --release -- --nocapture | grep '^measured'
 | Kepler $p_\theta$, `Dopri5` | Same orbit, $t \in [0, 200]$, tight | $2.5 \times 10^{-12}$ | $3 \times 10^{-11}$ | `energy.rs` |
 | Kepler energy by quarter, $t \in [0, 2000]$ | `Dopri5` at `rtol = 1e-5`<br>`Variational4` at $dt = 0.1$ | $4.4, 9.3, 14, 20 \times 10^{-4}$<br>$2.02 \times 10^{-6}$ in every quarter | grows > 3×<br>grows ≤ 1.5× | `energy.rs` |
 | Order of the variational solvers | Pendulum, error ratio on halving $dt$ | 4.004 and 15.97 | 3.6–4.4 and 13–19 | `stepper.rs` |
-| Continuity across knots | Double pendulum, `rtol = 1e-10` | $q$: $1.4 \times 10^{-17}$<br>$\dot{q}$: $2.6 \times 10^{-16}$<br>$\ddot{q}$: $2.2 \times 10^{-14}$ | $10^{-15}$<br>$5 \times 10^{-15}$<br>$3 \times 10^{-13}$ | `trajectory.rs` |
+| Continuity across knots | Double pendulum, `rtol = 1e-10` | $q$: $2.2 \times 10^{-16}$<br>$\dot{q}$: $2.2 \times 10^{-16}$<br>$\ddot{q}$: $3.3 \times 10^{-14}$ | $3 \times 10^{-15}$<br>$5 \times 10^{-15}$<br>$4 \times 10^{-13}$ | `trajectory.rs` |
+| Very short steps: acceleration inside vs the equations of motion | Double pendulum, one bounded step of 1, 4 and 1000 ulps, $10^{-9}$, $10^{-6}$, $10^{-4}$, from $t = 1$ and $t = 10^6$ | `Dopri5` and `Variational4` both $3.6 \times 10^{-12}$, from the step of $10^{-6}$ | $4 \times 10^{-11}$ | `stepper.rs` |
 | Event times | Pendulum, amplitude 1, 11 passages vs quarter periods, tight | $1.6 \times 10^{-12}$ | $2 \times 10^{-11}$ | `trajectory.rs` |
 | Energy on a Poincaré section | Double pendulum, small oscillations, $t \in [0, 200]$, tight | $1.7 \times 10^{-11}$ | $2 \times 10^{-10}$ | `trajectory.rs` |
-| Cart-pole linearization vs closed form | Three parameter sets, upright | $4.8 \times 10^{-16}$ | $10^{-14}$ | `control.rs` |
-| Linearization vs central differences | Double pendulum and damped, pushed cart-pole, 20 random states | $2.1 \times 10^{-9}$ (the differences' own error) | $3 \times 10^{-8}$ | `control.rs` |
+| Cart-pole linearization vs closed form | Three parameter sets, upright | $6.7 \times 10^{-16}$ | $10^{-14}$ | `control.rs` |
+| Linearization vs central differences | Double pendulum and damped, pushed cart-pole, 20 random states | $2.7 \times 10^{-9}$ (the differences' own error) | $3 \times 10^{-8}$ | `control.rs` |
 | Cart momentum under a constant push | `Variational4`, $dt = 0.01$, 200 steps | $1.1 \times 10^{-14}$ | $2 \times 10^{-13}$ | `control.rs` |
 | Schwarzschild conserved quantities | $r_s = 1$, from $r = 10$ with $\dot{\varphi} = 0.02$, proper time 2000, tight; $r \in [4.10, 10]$ | $p_t$: $8.9 \times 10^{-13}$<br>$p_\varphi$: $3.1 \times 10^{-12}$<br>norm: $3.7 \times 10^{-13}$<br>$\theta - \pi/2$: $8.9 \times 10^{-16}$ | $10^{-11}$<br>$4 \times 10^{-11}$<br>$5 \times 10^{-12}$<br>$10^{-14}$ | `systems.rs` |
-| Schwarzschild periapsis advance | Same orbit | 2.784 rad per orbit, equal between orbits to $8.4 \times 10^{-13}$ | $10^{-11}$ | `systems.rs` |
+| Schwarzschild periapsis advance | Same orbit | 2.784 rad per orbit, equal between orbits to $7.4 \times 10^{-13}$ | $10^{-11}$ | `systems.rs` |
 | Photon sphere | Tangential ray at $1.5\,r_s$ and at $\pm 10^{-6}$ | radial acceleration $1.5 \times 10^{-16}$; inside falls in, outside escapes | $2 \times 10^{-15}$ | `systems.rs` |
 | Kapitza pendulum | $a = 0.05$, $l = 1$, from $\pi + 0.08$, 500 drive periods | ratio 2: stays within 0.080 rad<br>ratio 0.5: falls | < 0.1<br>> 1 | `systems.rs` |
-| Kepler Cartesian acceleration vs $-\mu \hat{r}/r^2$ | Through `SceneMap`, 200 mid-step samples, tight | $5.9 \times 10^{-10}$ ($4.1 \times 10^{-10}$ on `libm`) | $10^{-8}$ | `systems.rs` |
+| Kepler Cartesian acceleration vs $-\mu \hat{r}/r^2$ | Through `SceneMap`, 200 mid-step samples, tight | $9.6 \times 10^{-10}$ ($2.5 \times 10^{-10}$ on `libm`) | $10^{-8}$ | `systems.rs` |
+| Schwarzschild metric just outside the horizon | Held at rest at $r = r_s (1 + \delta)$, $\delta = 10^{-6}$ to $10^{-12}$: $\ddot{r}$ vs $-r_s / 2r^2$ | $5.6 \times 10^{-17}$ | $6 \times 10^{-16}$ | `systems.rs` |
 | Damped cart-pole: energy lost vs friction work | $t \in [0, 6]$, tight | $1.1 \times 10^{-13}$ | $2 \times 10^{-12}$ | `systems.rs` |
 | Damped oscillator vs closed form | $\omega = 3$, $\zeta = 0.15$, friction as a generalized force, $t = 6$ | default $1.3 \times 10^{-10}$<br>tight $1.3 \times 10^{-13}$<br>`Variational4`, $dt = 0.01$: $1.9 \times 10^{-7}$<br>`Variational2`: $2.3 \times 10^{-4}$ | $2 \times 10^{-9}$<br>$2 \times 10^{-12}$<br>$2 \times 10^{-6}$<br>$3 \times 10^{-3}$ | `forces.rs` |
 | Order of the variational solvers with friction | Same oscillator, error ratio on halving $dt$ | 3.997 and 15.85 | 3.6–4.4 and 13–19 | `forces.rs` |
-| Driven oscillator vs closed form | $\omega_0 = 2$, $F = 1.5$, $\Omega = 3.1$, $t = 9$; drive as a force and inside $L$ | tight $5.8 \times 10^{-13}$<br>`Variational4`: $6.3 \times 10^{-8}$<br>`Variational2`: $1.9 \times 10^{-4}$<br>the two formulations: $1.2 \times 10^{-15}$ | $6 \times 10^{-12}$<br>$7 \times 10^{-7}$<br>$2 \times 10^{-3}$<br>$2 \times 10^{-14}$ | `forces.rs` |
-| Charge in a magnetic field, 10 turns | $m = 0.7$, $q = 1.3$, $B = 2.1$, $v = 1.9$, symmetric gauge | tight: position $2.7 \times 10^{-12}$, velocity $1.1 \times 10^{-11}$, speed $5.6 \times 10^{-12}$<br>`Variational4`, $dt = 0.005$: position $2.9 \times 10^{-7}$, speed $2.8 \times 10^{-15}$ | $3 \times 10^{-11}$, $2 \times 10^{-10}$, $6 \times 10^{-11}$<br>$3 \times 10^{-6}$, $5 \times 10^{-14}$ | `forces.rs` |
+| Driven oscillator vs closed form | $\omega_0 = 2$, $F = 1.5$, $\Omega = 3.1$, $t = 9$; drive as a force and inside $L$ | tight $5.8 \times 10^{-13}$<br>`Variational4`: $6.3 \times 10^{-8}$<br>`Variational2`: $1.9 \times 10^{-4}$<br>the two formulations: $5.6 \times 10^{-16}$ | $6 \times 10^{-12}$<br>$7 \times 10^{-7}$<br>$2 \times 10^{-3}$<br>$2 \times 10^{-14}$ | `forces.rs` |
+| Charge in a magnetic field, 10 turns | $m = 0.7$, $q = 1.3$, $B = 2.1$, $v = 1.9$, symmetric gauge | tight: position $2.7 \times 10^{-12}$, velocity $1.1 \times 10^{-11}$, speed $5.6 \times 10^{-12}$<br>`Variational4`, $dt = 0.005$: position $2.9 \times 10^{-7}$, speed $5.8 \times 10^{-16}$ | $3 \times 10^{-11}$, $2 \times 10^{-10}$, $6 \times 10^{-11}$<br>$3 \times 10^{-6}$, $5 \times 10^{-14}$ | `forces.rs` |
 | Same, Landau gauge: conserved $p_x$ | `Variational4`, 5000 steps | exactly 0 | $5 \times 10^{-15}$ | `forces.rs` |
 | Chains of 1 and 2 links vs hand-expanded Lagrangians | Positions through `velocity_of`, 40 random states | $2.0 \times 10^{-15}$ | $3 \times 10^{-14}$ | `chains.rs` |
 | Engine vs oracle, chains of 3, 5 and 8 links | Uneven masses and lengths, 20 random states each, moving and at rest | $1.4 \times 10^{-14}$, $2.8 \times 10^{-14}$, $1.7 \times 10^{-13}$ | $2 \times 10^{-13}$, $3 \times 10^{-13}$, $2 \times 10^{-12}$ | `chains.rs` |
 | Chain energy, `Dopri5` | Released from horizontal, $t \in [0, 3]$, tight | 3 links: $9.6 \times 10^{-14}$<br>5 links: $5.6 \times 10^{-14}$ | $10^{-12}$ | `chains.rs` |
 | Chain energy band, `Variational4` | Same start, $dt = 0.002$, 400 steps | 3 links: $1.2 \times 10^{-9}$<br>5 links: $1.4 \times 10^{-9}$ | $1.5 \times 10^{-8}$ | `chains.rs` |
-| Hanging chain: $M a_q$ vs $-K$ | 3 and 5 links | $8.7 \times 10^{-16}$, $1.2 \times 10^{-15}$ | $2 \times 10^{-14}$ | `chains.rs` |
+| Hanging chain: $M a_q$ vs $-K$ | 3 and 5 links | $8.7 \times 10^{-16}$, $1.6 \times 10^{-15}$ | $2 \times 10^{-14}$ | `chains.rs` |
+
+Re-measured for 0.1.1, after the fixes for #4, #5, #7, #8 and #16. Two limits were loosened, each by less than its measurement grew:
+- **Continuity of position across knots**, $10^{-15} \to 3 \times 10^{-15}$, measured $1.4 \times 10^{-17} \to 2.2 \times 10^{-16}$ ($1.9 \times 10^{-16}$ on the platform's math library). A segment is now built from the increments the solver added to its start knot rather than from the difference of two rounded knots, so it ends within one rounding of the next knot instead of on it. In exchange a short step's segment is right inside: 0.1.0's one-ulp step had velocities off by order one there (#7).
+- **Continuity of acceleration across knots**, $3 \times 10^{-13} \to 4 \times 10^{-13}$, measured $2.2 \times 10^{-14} \to 3.3 \times 10^{-14}$, for the same reason.
+
+The other figures that moved did so within their limits. Equilibrating the linear solve changes which pivot a few matrices take (the hanging chain of five, the linearizations). The Kepler figure is the largest of 200 samples. Over 20,000 samples of the same orbit, the increments give a lower 99th percentile than 0.1.0's knot differences ($2.2$ against $2.6 \times 10^{-10}$) and a lower maximum ($1.06$ against $1.35 \times 10^{-9}$).
 
 What the implementation established beyond the prototype:
 - **A segment's start is the solver's knot bit for bit** once the polynomial is stored in powers of the time since the start of the step. Stored in the normalized variable, the starting velocity came back one rounding off, and two tests that compared knots exactly caught it.
@@ -302,6 +310,10 @@ Checked once by hand before the first release, on the packaged tarball rather th
 - **A `no_std`, no-allocator binary links for `thumbv7em-none-eabihf`:** steppers of both families, the 4×4 indefinite solve and a linearization, 90 KiB of ELF, with `lagrangian` and `libm` as its only dependencies. CI checks that target with `cargo check`, which generates no code and links nothing.
 - **A `wasm32-unknown-unknown` module has no imports**, is 70 KiB, and run in V8 reproduces the native figures: double pendulum energy drift $8.3 \times 10^{-13}$ at tight tolerances and Kepler $p_\theta$ drift $3.7 \times 10^{-16}$.
 - **The beta (1.101) and nightly (1.102) compilers** lint the workspace clean, pass all 118 tests and build the documentation.
+
+Found while fixing 0.1.0, and measured once rather than gated:
+- **At rest the adaptive step grows tenfold per step.** In 0.1.0 it was infinite at step 316 and the next call never returned. Capped at `f64::MAX`, a resting double pendulum now steps until the time itself overflows, at step 383, and stops with `NonFiniteState`.
+- **A fixed step must resolve the fastest motion.** `Variational4` at $dt = 0.01$ on the chaotic double pendulum reports an acceleration inside a step that is off the equations of motion by up to 5.5 (relative to $\max(1, |\ddot{q}|)$), at $t = 6.09$, where the pendulum whirls at 12 rad/s and the acceleration swings from $+12$ to $-40$ within the step. The knot itself is $10^{-4}$ off a tight reference there. Halving $dt$ divides the figure by about ten. 0.1.0 measured the same.
 
 Not measured: speed. No benchmark exists yet, and nothing in the README is a claim about performance.
 
