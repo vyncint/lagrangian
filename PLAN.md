@@ -312,6 +312,7 @@ Checked once by hand before the first release, on the packaged tarball rather th
 - **The beta (1.101) and nightly (1.102) compilers** lint the workspace clean, pass all 118 tests and build the documentation.
 
 Found while fixing 0.1.0, and measured once rather than gated:
+- **The randomized harness, `tests/robustness.rs`.** Against 0.1.0 it stops on the hang of #4, at seed 1, case 2, when its watchdog has seen no progress for 60 s. Against 0.1.1 in a release build: 93,716 cases from seeds 1 to 167 in 60 s, and 893,091 cases from seeds 168 to 1751 in 600 s, with no panic, no hang and no broken promise. It found one thing the deep test had missed. A cart of mass `f64::MAX` has an acceleration of $-2.3 \times 10^{-308}$, a normal number whose half is subnormal, so the documented exception to a segment starting exactly at its knot covers every acceleration below $2 \cdot$ `f64::MIN_POSITIVE`, not only subnormal ones (seed 68, case 72). A debug build runs about 360 cases in the two seconds CI gives it.
 - **At rest the adaptive step grows tenfold per step.** In 0.1.0 it was infinite at step 316 and the next call never returned. Capped at `f64::MAX`, a resting double pendulum now steps until the time itself overflows, at step 383, and stops with `NonFiniteState`.
 - **A fixed step must resolve the fastest motion.** `Variational4` at $dt = 0.01$ on the chaotic double pendulum reports an acceleration inside a step that is off the equations of motion by up to 5.5 (relative to $\max(1, |\ddot{q}|)$), at $t = 6.09$, where the pendulum whirls at 12 rad/s and the acceleration swings from $+12$ to $-40$ within the step. The knot itself is $10^{-4}$ off a tight reference there. Halving $dt$ divides the figure by about ten. 0.1.0 measured the same.
 
@@ -377,6 +378,27 @@ The variational step used to compute the residual of its implicit equation toget
 | dev, `[profile.dev] opt-level = 2` | 195 ns | 4.0 ms |
 
 Raising only `lagrangian`'s level does nothing, because the engine is generic over the user's Lagrangian and is compiled in the user's crate. The README and the crate documentation recommend `[profile.dev] opt-level = 1`. This workspace keeps its own `dev` and `test` profiles at the default, `opt-level = 0`. `cargo test --workspace` takes 15 s there against 5 s at `opt-level = 1`. The difference is not worth it, because the suite, and the stack measurements of #6 in particular, should run the code that a user's default debug build runs.
+
+### 7.4 Stack (2026-11-25, 0.1.1)
+
+The smallest thread stack each operation completes in, found by a binary search to 5% over child processes, for `Springs<N>` on `x86_64` Linux with rustc 1.100.0. Linux gives a thread no less than 16 KiB, so a need below that is not resolved. The README and the crate documentation carry these tables, and `tests/stack.rs` runs each operation at $N = 8$, 16 and 32 with 1.5 times its figure, in whichever profile it is built.
+
+| $N$ | `accelerations` | `eom_terms` | Dopri5 step | Variational4 step | `linearize_free` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| release, 2–8 | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB |
+| release, 16 | 38 KiB | 32 KiB | 47 KiB | 64 KiB | 83 KiB |
+| release, 32 | 189 KiB | 166 KiB | 206 KiB | 279 KiB | 470 KiB |
+| release, 64 | 636 KiB | 583 KiB | 724 KiB | 981 KiB | 1.5 MiB |
+| release, 128 | 2.5 MiB | 2.3 MiB | 2.7 MiB | 3.7 MiB | not run |
+| debug, 4 | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | 29 KiB |
+| debug, 8 | 33 KiB | 32 KiB | 41 KiB | 45 KiB | 64 KiB |
+| debug, 16 | 87 KiB | 83 KiB | 99 KiB | 112 KiB | 197 KiB |
+| debug, 32 | 292 KiB | 279 KiB | 304 KiB | 362 KiB | 693 KiB |
+| debug, 64 | 1.0 MiB | 981 KiB | 1.0 MiB | 1.2 MiB | 2.5 MiB |
+
+Against 0.1.0, as measured for #6, 0.1.1 needs up to 5% more in release: `accelerations` at $N = 32$ takes 189 KiB against 181, and the variational step 279 KiB against 267. The equilibrated linear solve carries two more vectors and a copy of the matrix. The debug variational step needs up to 19% more, 362 KiB against 304 at $N = 32$, because the simplified Newton iteration of #13 keeps a factorization from one iteration to the next. That growth was cut where it was cheap: holding one factorization at a time, built in a frame of its own, took the debug figure at $N = 32$ from 395 to 362 KiB and the one at $N = 4$ under 16 KiB. The release figures did not change, since the optimizer had already shared those frames.
+
+What an overflow does, measured once against 0.1.0 and not a test: on Linux the process aborts with "thread … has overflowed its stack". On `wasm32-unknown-unknown`, run in V8, the default 1 MiB stack sits below the static data; an overflow traps with "memory access out of bounds" and a canary in static memory stays intact, and `linearize_free` at $N = 64$ and `accelerations` at $N = 128$ trap. Bare metal was not measured: with `cortex-m-rt`'s default layout nothing guards the stack.
 
 ---
 

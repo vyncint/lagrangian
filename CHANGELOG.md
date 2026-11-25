@@ -21,6 +21,13 @@ heading, in a bullet that begins **Breaking:**.
   crate's optimization level does not help. The documentation recommends
   `[profile.dev] opt-level = 1`, which brings it within a third of release
   speed ([#15]).
+- The stack each operation needs, by `N`, in release and debug builds, what
+  an overflow does on each kind of target and how to give a thread more, in
+  the README and the crate documentation ([#6]). A test holds the table to
+  the code.
+- A randomized robustness harness runs on every change and for ten minutes
+  every week ([#11]): random and extreme inputs through every public entry
+  point, failing on a panic, a hang, or an `Ok` that breaks its promise.
 
 ### Changed
 
@@ -34,6 +41,10 @@ heading, in a bullet that begins **Breaking:**.
   first segment starts, when there is one ([#8]). A file whose initial state
   disagreed with its first segment sampled to one at its start time and to
   the other just after it.
+- The documented exception to a segment starting exactly at its knot is
+  wider than 0.1.0 said: an acceleration below `2·f64::MIN_POSITIVE`, not
+  only a subnormal one, can lose its last bit, since its half is subnormal.
+  The robustness harness found one at `2.3e-308`.
 - `Stepper::set_state` also resets the step size and the error history: the
   next step is the one a new stepper would take from that state.
 - A fixed step too short for the clock to advance at the current time is
@@ -128,8 +139,10 @@ The first release: the core crate.
 [Unreleased]: https://github.com/vyncint/lagrangian/compare/v0.1.0...HEAD
 [#4]: https://github.com/vyncint/lagrangian/issues/4
 [#5]: https://github.com/vyncint/lagrangian/issues/5
+[#6]: https://github.com/vyncint/lagrangian/issues/6
 [#7]: https://github.com/vyncint/lagrangian/issues/7
 [#8]: https://github.com/vyncint/lagrangian/issues/8
+[#11]: https://github.com/vyncint/lagrangian/issues/11
 [#12]: https://github.com/vyncint/lagrangian/issues/12
 [#13]: https://github.com/vyncint/lagrangian/issues/13
 [#14]: https://github.com/vyncint/lagrangian/issues/14

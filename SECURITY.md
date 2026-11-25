@@ -21,6 +21,12 @@ What the project does continuously, enforced by required CI on every change:
   nothing else; `serde` is opt-in. `.github/scripts/check-dependency-tree.sh`
   asserts each of those trees exactly, so a new dependency is a visible
   decision and not a side effect.
+- **Random and extreme inputs** (`tests/robustness.rs`): `NaN`, `±∞`,
+  subnormals, `±1e300` and nonsensical masses go through every public
+  entry point, and the run fails on a panic, a call that does not return,
+  or an `Ok` that breaks its documented promise. Every CI run spends two
+  seconds on it and the weekly canary ten minutes, from new seeds each
+  week. Against 0.1.0 it fails within a minute, on the hang of #4.
 - **Dependency policy** (`cargo-deny` job): RUSTSEC advisories, yanked
   crates, license allowlist, and crates.io-only sources — on every PR, with
   weekly grouped Dependabot updates.
@@ -58,6 +64,16 @@ the item named, and each bound has a test:
 - **Work per query.** `Trajectory::crossings_with` looks at no more than
   2¹⁶ points inside each step, and `Trajectory::energy_drift` takes no more
   than 2²⁰ samples, whatever count is asked for.
+- **Stack.** Nothing allocates, so the engine's working set is on the
+  stack and grows with the square of `N`: 189 KiB for `accelerations` at
+  `N = 32` in a release build, 292 KiB in a debug one. The crate
+  documentation has the table by operation and `N`, and `tests/stack.rs`
+  holds it to the code. An overflow aborts the process on an operating
+  system and traps on `wasm32`, but on bare metal with `cortex-m-rt`'s
+  default layout it can run into static data silently: the one
+  memory-safety hazard `#![forbid(unsafe_code)]` cannot rule out. Size the
+  stack from the table there, and put it below the static data
+  (`flip-link`).
 - **Non-finite values.** A state that becomes `NaN` or infinite is reported
   as `NonFiniteState` rather than propagated, and no step returns a segment
   that overflows between its ends.

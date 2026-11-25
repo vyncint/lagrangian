@@ -139,7 +139,15 @@ runtime dependencies, and the one dev-dependency is `serde_json`.
   `-D warnings`, the suite and rustdoc with `-D warnings` on beta and
   nightly every Monday, and on demand from the Actions tab. It is not
   required, so it never blocks a pull request; a red canary means the next
-  toolchain breaks something here.
+  toolchain breaks something here. It also runs the randomized robustness
+  harness for ten minutes, from seeds that change every run.
+- **Random and extreme inputs are a test.** `tests/robustness.rs` pushes
+  random and extreme values (`NaN`, `±∞`, subnormals, `±1e300`, zero and
+  negative masses) through every public entry point, checks that no call
+  panics, hangs or returns an `Ok` that breaks its documented promise, and
+  names the seed and the case of anything it finds. Every `cargo test`
+  runs it for two seconds; set `LAGRANGIAN_ROBUSTNESS_SECONDS` for longer
+  and `LAGRANGIAN_ROBUSTNESS_SEED` to start from a reported seed.
 
 ## 4. Commit conventions
 

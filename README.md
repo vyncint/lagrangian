@@ -223,6 +223,22 @@ opt-level = 1
 
 The table is [`benches/examples/profiles.rs`](https://github.com/vyncint/lagrangian/blob/main/benches/examples/profiles.rs), built each of those ways.
 
+### Stack
+
+Nothing allocates, so the engine works on the stack, and the need grows with the square of `N`: each call to your Lagrangian takes `q` and `q̇` as arrays of dual numbers `2(N + 1)` floats wide. The smallest thread stack each call completes in, for a chain of `N` springs on `x86_64` Linux (16 KiB is the least a Linux thread gets):
+
+| `N` | `accelerations` | `eom_terms` | Dopri5 step | Variational4 step | `linearize_free` |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| release, ≤ 8 | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB |
+| release, 16 | 38 KiB | 32 KiB | 47 KiB | 64 KiB | 83 KiB |
+| release, 32 | 189 KiB | 166 KiB | 206 KiB | 279 KiB | 470 KiB |
+| release, 64 | 636 KiB | 583 KiB | 724 KiB | 981 KiB | 1.5 MiB |
+| debug, 8 | 33 KiB | 32 KiB | 41 KiB | 45 KiB | 64 KiB |
+| debug, 16 | 87 KiB | 83 KiB | 99 KiB | 112 KiB | 197 KiB |
+| debug, 32 | 292 KiB | 279 KiB | 304 KiB | 362 KiB | 693 KiB |
+
+[`stack.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/stack.rs) runs each at `N = 8`, 16 and 32 with half again these figures. On an operating system an overflow aborts the process, and a spawned thread gets 2 MiB unless `std::thread::Builder::stack_size` says otherwise. On `wasm32` the stack is 1 MiB and an overflow traps. **On bare metal an overflow can corrupt memory silently**, since `cortex-m-rt`'s default layout puts no guard below the stack: size it from the table and place it below the static data (`flip-link`). The [crate documentation](https://docs.rs/lagrangian) has the rest.
+
 ## How it works
 
 For coordinates `q`, the Euler-Lagrange equations expand to a linear system for the accelerations:
