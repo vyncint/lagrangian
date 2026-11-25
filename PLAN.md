@@ -306,7 +306,7 @@ What the implementation established beyond the prototype:
 - **The suite was seen to fail.** A one-off sweep of 20 single-line faults (a dropped guard, a wrong stage, a wrong seed, a skipped check, across the AD types, engine, solvers, segment, trajectory and serde code) was run by hand. Eighteen were caught at once. The two that were not exposed real gaps, now closed by `the_start_is_the_knot_bit_for_bit` and by serde cases for a backward segment that is wrong in no other way. All 20 are caught now. The sweep is not a CI gate.
 
 Checked once by hand before the first release, on the packaged tarball rather than the working tree. None of these is a CI gate:
-- **The packaged crate tests itself outside the workspace:** 118 tests with every feature, 66 with no allocator.
+- **The packaged crate tests itself outside the workspace:** 118 tests with every feature, 66 with no allocator; for 0.1.1, 138 and 78.
 - **A `no_std`, no-allocator binary links for `thumbv7em-none-eabihf`:** steppers of both families, the 4×4 indefinite solve and a linearization, 90 KiB of ELF, with `lagrangian` and `libm` as its only dependencies. CI checks that target with `cargo check`, which generates no code and links nothing.
 - **A `wasm32-unknown-unknown` module has no imports**, is 70 KiB, and run in V8 reproduces the native figures: double pendulum energy drift $8.3 \times 10^{-13}$ at tight tolerances and Kepler $p_\theta$ drift $3.7 \times 10^{-16}$.
 - **The beta (1.101) and nightly (1.102) compilers** lint the workspace clean, pass all 118 tests and build the documentation.
@@ -410,4 +410,4 @@ What an overflow does, measured once against 0.1.0 and not a test: on Linux the 
 - **Phase 4 — partly done:** `svg_showcase` and the flagship `README.md` exist. **Not started:** `benches`, `ode_adapters`, `egui_playground` (native + WASM).
 - **Phase 5 — not started:** `bevy_lagrangian`.
 
-`0.1.0` (2026-11-25) is Phases 1 to 3 with `svg_showcase` and the README. Phases 4 and 5 ship in later `0.x` releases.
+`0.1.0` (2026-11-25) is Phases 1 to 3 with `svg_showcase` and the README. `0.1.1` (2026-11-25) fixes what a deep test of `0.1.0` found: milestone `0.1.1`, issues #4 to #16. Phases 4 and 5 ship in later `0.x` releases.
