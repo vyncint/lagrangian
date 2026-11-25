@@ -62,6 +62,24 @@
 //! `default-features = false, features = ["libm"]`. That build has no
 //! allocator requirement; the engine, [`Stepper`] and [`Segment`] all work.
 //!
+//! # Performance
+//!
+//! [`accelerations`] evaluates your Lagrangian `N + 2` times with dual
+//! numbers `O(N)` wide: 178 ns for the double pendulum in a release build,
+//! and 20 µs for a chain of 16 coordinates (`cargo bench -p benches` in the
+//! repository; the README has the table).
+//!
+//! The engine is generic over your Lagrangian, so it is compiled in your
+//! crate, at your crate's optimization level, and a default debug build
+//! runs it about 40 times slower than a release one. Raising only this
+//! crate's level with `[profile.dev.package.lagrangian]` changes nothing.
+//! Raising your own brings a debug build within a third of release speed:
+//!
+//! ```toml
+//! [profile.dev]
+//! opt-level = 1
+//! ```
+//!
 //! # What it is not
 //!
 //! Coordinates must be minimal: there are no constraint forces or Lagrange

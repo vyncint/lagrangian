@@ -1,0 +1,30 @@
+[package]
+name = "benches"
+description = "Benchmarks for lagrangian. Not published."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# No criterion: a timing loop is a few lines, and it keeps this member, like
+# the crate it measures, free of dependencies. `cargo bench -p benches` runs
+# both targets; a word after `--` keeps only the benchmarks it names.
+[dependencies]
+lagrangian = { path = "../crates/lagrangian" }
+
+[lints]
+workspace = true
+
+# The shared code is not a benchmark of its own.
+[lib]
+bench = false
+
+[[bench]]
+name = "engine"
+harness = false
+
+[[bench]]
+name = "steppers"
+harness = false

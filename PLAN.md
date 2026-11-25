@@ -189,7 +189,7 @@ lagrangian/
 ├── examples/
 │   ├── egui_playground/             # Workspace member, publish = false (native + WASM via Trunk)
 │   └── ode_adapters/                # Workspace member, publish = false (ode_solvers, diffsol)
-└── benches/                         # Workspace member, publish = false (criterion)
+└── benches/                         # Workspace member, publish = false (a timing loop, no dependencies)
 ```
 
 Cargo does not build `examples/*.rs` placed at a virtual workspace root. A loose example must live inside a package (`crates/lagrangian/examples/`), and anything with external dependencies must be its own workspace member.
@@ -230,7 +230,7 @@ Cargo does not build `examples/*.rs` placed at a virtual workspace root. A loose
 | `f32` | None | Not planned for `0.x` |
 | Contacts and collision detection | Use `rapier` or `avian` | Never |
 
-**Target envelope:** small systems, roughly $N \le 16$. One extraction costs $O(N^2) \cdot \text{cost}(L)$ plus an $O(N^3)$ solve. The benchmark crate must confirm the envelope before the README states it.
+**Target envelope:** small systems, roughly $N \le 16$. One extraction costs $O(N^2) \cdot \text{cost}(L)$ plus an $O(N^3)$ solve. Measured (§7.3): `accelerations` for a chain of springs takes 2.5 µs at $N = 8$, 20 µs at $N = 16$ and 0.19 ms at $N = 32$, so a 1 kHz control loop has room for a 16-coordinate system and not for a 32-coordinate one. The envelope stands.
 
 ---
 
@@ -258,7 +258,7 @@ cargo test -p lagrangian --release -- --nocapture | grep '^measured'
 | Same, five points inside each step | | default $1.7 \times 10^{-8}$<br>tight $1.9 \times 10^{-11}$ | $2 \times 10^{-7}$<br>$2 \times 10^{-10}$ | `energy.rs` |
 | Rotating hoop Jacobi integral | $R = 1$, $\Omega = 5$, $\theta_0 = 0.3$ at rest, $t \in [0, 20]$, tight | knots $8.1 \times 10^{-12}$<br>mid-step $9.0 \times 10^{-12}$ | $10^{-10}$ | `energy.rs` |
 | Rotating hoop tilted equilibrium | Acceleration at $\cos\theta^* = g/(R\Omega^2)$ | $1.8 \times 10^{-15}$ | $2 \times 10^{-14}$ | `energy.rs` |
-| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.1 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
+| Double pendulum energy band, `Variational4` | Same initial state, $10^4$ steps | $dt = 0.005$: $2.2 \times 10^{-5}$<br>$dt = 0.01$: $3.9 \times 10^{-4}$<br>ratio 17–20 | $3 \times 10^{-4}$<br>ratio > 8 | `energy.rs` |
 | Same, by quarter of the run | $dt = 0.005$ | $1.95, 1.91, 1.79, 1.84 \times 10^{-5}$ | last ≤ 2× first | `energy.rs` |
 | Kepler $p_\theta$, `Variational4` | $\mu = 1$, $r_0 = 1$, $\dot{\theta}_0 = 1.2$, $dt = 0.02$, $10^4$ steps | $3.7 \times 10^{-16}$ | $5 \times 10^{-15}$ | `energy.rs`, `stepper.rs` |
 | Same, $2 \times 10^5$ steps | Measured once, not a test | $5.6 \times 10^{-16}$ | | |
@@ -315,7 +315,7 @@ Found while fixing 0.1.0, and measured once rather than gated:
 - **At rest the adaptive step grows tenfold per step.** In 0.1.0 it was infinite at step 316 and the next call never returned. Capped at `f64::MAX`, a resting double pendulum now steps until the time itself overflows, at step 383, and stops with `NonFiniteState`.
 - **A fixed step must resolve the fastest motion.** `Variational4` at $dt = 0.01$ on the chaotic double pendulum reports an acceleration inside a step that is off the equations of motion by up to 5.5 (relative to $\max(1, |\ddot{q}|)$), at $t = 6.09$, where the pendulum whirls at 12 rad/s and the acceleration swings from $+12$ to $-40$ within the step. The knot itself is $10^{-4}$ off a tight reference there. Halving $dt$ divides the figure by about ten. 0.1.0 measured the same.
 
-Not measured: speed. No benchmark exists yet, and nothing in the README is a claim about performance.
+Speed is in §7.3.
 
 ### 7.2 The prototype (2026-11-25, before any Rust)
 
@@ -335,6 +335,48 @@ What it established:
 - The implementation does better than the prototype at the same tolerance (double pendulum at tight: $8.3 \times 10^{-13}$ against $2.5 \times 10^{-12}$) because its step controller is the PI controller of Hairer, Nørsett and Wanner rather than a plain integral one.
 
 **Rule:** every limit in the suite is about 10× a measurement in §7.1. A change that moves a measurement updates this table in the same pull request. Never loosen a limit without recording the new measurement and the reason here.
+
+### 7.3 Speed (2026-11-25, 0.1.1)
+
+Measured by the `benches` member, `cargo bench -p benches`, in a release build on an Intel Core i5-13500 with rustc 1.100.0. A time is the median of seven batches of at least 50 ms each; repeated runs agree to about 5%. CI builds the benchmarks and runs none of them.
+
+**The engine, double pendulum.** `accelerations` 178 ns, against 22 ns for the hand-derived equations (8×), to which it agrees to $9 \times 10^{-16}$. `eom_terms` 146 ns, of which `mass_matrix` 80 ns (55%). `energy` 36 ns. `linearize_free` 1.2 µs.
+
+**The engine, a chain of $N$ springs** (`Springs<N>`: one cosine per coordinate, so the mass matrix depends on the configuration). Times in µs:
+
+| $N$ | One $L$ at `f64` | at `Grad<N>` | at `Dual<Grad<N>>` | `accelerations` | of it in $M$ | `linearize_free` | Evaluations per `accelerations` |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 2 | 0.008 | 0.016 | 0.032 | 0.14 | 45% | 1.2 | 3 `Dual<Grad>`, 1 `Grad` |
+| 4 | 0.014 | 0.039 | 0.082 | 0.52 | 62% | 12 | 5, 1 |
+| 8 | 0.028 | 0.11 | 0.24 | 2.5 | 76% | 123 | 9, 1 |
+| 16 | 0.056 | 0.46 | 1.0 | 20 | 89% | 1,650 | 17, 1 |
+| 32 | 0.12 | 1.7 | 5.2 | 194 | 92% | not run | 33, 1 |
+
+**The solvers, chaotic double pendulum**, $q_0 = (2.2, 2.8)$ at rest, $t \in [0, 20]$, before and after the simplified Newton iteration of #13. Before and after were run alternately, three times each, and the medians are shown:
+
+| Solver | Steps | µs per step, before → after | Evaluations per step, before → after | Energy error |
+| --- | ---: | --- | --- | ---: |
+| `Dopri5`, default | 2,650 | 1.4 | 18.5 `Dual<Grad<2>>` + 6.2 `Grad<2>` | $3.4 \times 10^{-9}$ |
+| `Dopri5`, tight | 10,181 | 1.4 | 18.0 + 6.0 | $8.2 \times 10^{-13}$ |
+| `Variational2`, $dt = 0.005$ | 4,000 | 1.37 → 1.17 | 18.4 + 3.0 → 9.0 + 11.8 | $1.0 \times 10^{-3}$ |
+| `Variational4`, $dt = 0.01$ | 2,000 | 3.20 → 2.60 | 49.8 + 3.0 → 17.0 + 32.9 | $3.5 \times 10^{-4}$ |
+| `Variational4`, $dt = 0.005$ | 4,000 | 2.91 → 2.34 | 44.8 + 3.0 → 17.0 + 29.0 | $2.0 \times 10^{-5}$ |
+
+The variational step used to compute the residual of its implicit equation together with the residual's Jacobian, `2N` second-order evaluations, on every Newton iteration, the last included. It now computes the residual alone (two gradient evaluations), factors the Jacobian once per substep, and keeps it while each update shrinks the residual fourfold. On this run no Jacobian was ever refactored. Keeping one Jacobian across the three substeps of `Variational4` was tried and was slower: the first substep's Jacobian is a poor one for the second, whose step is negative, and an extra residual is needed before it is replaced. No accuracy limit moved. The one figure that changed, the double pendulum's energy band at $dt = 0.005$, went from $2.1$ to $2.2 \times 10^{-5}$ on `libm` against a limit of $3 \times 10^{-4}$.
+
+**The mass matrix (#14).** It is $N$ of the $N + 2$ evaluations, and 89% of `accelerations` at $N = 16$. A one-pass second-order jet would carry the value, the gradient and the $N(N + 1)/2$ entries of the symmetric Hessian through a single evaluation. Its multiplication costs about $3.5 N^2$ operations against about $10 N^2$ for $N$ passes of `Dual<Grad<N>>`, and each transcendental would run once. That is at most about a threefold saving on $M$, and `Springs<16>` already spends only $0.06$ of its $1.0$ µs per evaluation on its cosines. The cost is the stack. A jet scalar is $1 + N + N(N + 1)/2$ numbers, 153 at $N = 16$ against 34 for `Dual<Grad<16>>`. The arrays $q$ and $\dot{q}$ alone would take 39 KiB at $N = 16$, and 288 KiB at $N = 32$, before the Lagrangian creates a single temporary. That works against #6 and against the bare-metal targets the crate promises. The decision for 0.1.x is to keep $N$ passes. The jet is worth revisiting as an opt-in path when a user's $N$ makes the trade worth it, measured with this benchmark. Reusing the value and the momentum that the other passes compute saves nothing in forward mode, since every pass computes them again on its way to its own derivative.
+
+**Debug builds (#15).** The same calls from a crate that depends on `lagrangian`, built each way. The table is `benches/examples/profiles.rs`; two runs agree to 7%.
+
+| Profile | `accelerations`, double pendulum | `simulate`, $t \in [0, 20]$ |
+| --- | ---: | ---: |
+| release | 180 ns | 3.8 ms |
+| dev | 7,200 ns (40×) | 126 ms (33×) |
+| dev, `[profile.dev.package.lagrangian] opt-level = 3` | 7,300 ns | 126 ms |
+| dev, `[profile.dev] opt-level = 1` | 230 ns | 4.6 ms |
+| dev, `[profile.dev] opt-level = 2` | 195 ns | 4.0 ms |
+
+Raising only `lagrangian`'s level does nothing, because the engine is generic over the user's Lagrangian and is compiled in the user's crate. The README and the crate documentation recommend `[profile.dev] opt-level = 1`. This workspace keeps its own `dev` and `test` profiles at the default, `opt-level = 0`. `cargo test --workspace` takes 15 s there against 5 s at `opt-level = 1`. The difference is not worth it, because the suite, and the stack measurements of #6 in particular, should run the code that a user's default debug build runs.
 
 ---
 

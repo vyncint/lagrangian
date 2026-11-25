@@ -26,7 +26,7 @@ use core::array::from_fn;
 use super::Stepper;
 use crate::ad::{Dual, Grad};
 use crate::error::SimError;
-use crate::linalg;
+use crate::linalg::Lu;
 use crate::mechanics::{
     Lagrangian, NewtonMonitor, accelerations, max_abs, momentum, solve_failure,
     velocity_from_momentum,
@@ -153,14 +153,16 @@ struct Substep<const N: usize> {
 struct Residual<const N: usize> {
     /// `p₀ + D₁L_d + (h/2)·Q`.
     value: [f64; N],
-    /// Its derivative with respect to the increment.
-    jacobian: [[f64; N]; N],
     /// `∇_q L + Q` at the midpoint.
     force: [f64; N],
     /// The size of the terms that were summed into `value`: what its
     /// rounding error is relative to.
     scale: f64,
 }
+
+/// An update that shrinks the residual at least this much keeps the
+/// Jacobian it was computed with; a slower one asks for a new one.
+const KEEP_JACOBIAN: f64 = 0.25;
 
 /// One midpoint step of size `h`, which may be negative.
 ///
@@ -169,6 +171,13 @@ struct Residual<const N: usize> {
 /// subtracting two stored positions: that subtraction loses `|q|/h` digits
 /// and was measured to cost three orders of magnitude in momentum
 /// conservation (`PLAN.md` §7).
+///
+/// The iteration is simplified Newton. A residual costs two gradient
+/// passes of the Lagrangian and its Jacobian `2N` second-order ones, and
+/// the Jacobian, `−M + O(h)`, barely moves while the increment converges.
+/// So it is factored once and kept for as long as each update shrinks the
+/// residual fourfold. 0.1.0 built a new one on every iteration, the last
+/// included, where it was thrown away (#13).
 fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
     sys: &L,
     q: [f64; N],
@@ -180,13 +189,16 @@ fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
     let t_mid = t + 0.5 * h;
     let mut d: [f64; N] = from_fn(|i| h * velocity_guess[i]);
     let mut monitor = NewtonMonitor::new();
+    let mut factored: Option<Lu<N>> = None;
+    let mut last = f64::INFINITY;
 
     for _ in 0..NewtonMonitor::MAX_ITERATIONS {
         let r = residual(sys, q, p, d, t_mid, h);
         if !r.value.iter().all(|x| x.is_finite()) {
             return Err(SimError::NonFiniteState { t });
         }
-        if monitor.done(max_abs(&r.value), r.scale) {
+        let size = max_abs(&r.value);
+        if monitor.done(size, r.scale) {
             // p₁ = D₂L_d + (h/2)·Q, rewritten with the equation just solved
             // as p₁ = p₀ + h·(∇_q L + Q). The two agree to the residual, and
             // this form leaves the momentum of a cyclic coordinate (one L
@@ -200,9 +212,16 @@ fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
                 velocity: d.map(|x| x / h),
             });
         }
-        let negated = r.value.map(|x| -x);
-        let update =
-            linalg::solve(&r.jacobian, &negated).ok_or_else(|| solve_failure(&r.jacobian, t))?;
+        let lu = match factored {
+            Some(lu) if size <= KEEP_JACOBIAN * last => lu,
+            _ => {
+                let jacobian = jacobian(sys, q, d, t_mid, h);
+                Lu::factor(&jacobian).ok_or_else(|| solve_failure(&jacobian, t))?
+            }
+        };
+        factored = Some(lu);
+        last = size;
+        let update = lu.solve(&r.value.map(|x| -x));
         for i in 0..N {
             d[i] += update[i];
         }
@@ -210,12 +229,15 @@ fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
     Err(SimError::NewtonDidNotConverge { t })
 }
 
-/// The residual and its exact Jacobian at increment `d`.
+/// The midpoint and the velocity of the step with increment `d`.
+fn midpoint<const N: usize>(q: [f64; N], d: [f64; N], h: f64) -> ([f64; N], [f64; N]) {
+    (from_fn(|i| q[i] + 0.5 * d[i]), d.map(|x| x / h))
+}
+
+/// The residual at increment `d`, from two gradient passes.
 ///
 /// Write `L̃(q₀, d) = h·L(q₀ + d/2, d/h)`. Then `D₂L_d = ∂L̃/∂d` and
-/// `D₁L_d = ∂L̃/∂q₀ − ∂L̃/∂d`, so two gradients give the residual, and
-/// carrying one more derivative along each `d_j` gives its Jacobian:
-/// `2N` evaluations of the Lagrangian in all.
+/// `D₁L_d = ∂L̃/∂q₀ − ∂L̃/∂d`.
 fn residual<L: Lagrangian<N> + ?Sized, const N: usize>(
     sys: &L,
     q: [f64; N],
@@ -224,15 +246,68 @@ fn residual<L: Lagrangian<N> + ?Sized, const N: usize>(
     t_mid: f64,
     h: f64,
 ) -> Residual<N> {
-    let mid: [f64; N] = from_fn(|i| q[i] + 0.5 * d[i]);
-    let vel: [f64; N] = d.map(|x| x / h);
+    let (mid, vel) = midpoint(q, d, h);
+    let time = Grad::<N>::constant(t_mid);
+    // ∂L/∂d = ½·∇_q L + ∇_q̇ L / h
+    let by_d = sys
+        .lagrangian(
+            from_fn(|i| {
+                let mut g = Grad::constant(mid[i]);
+                g.d[i] = 0.5;
+                g
+            }),
+            from_fn(|i| {
+                let mut g = Grad::constant(vel[i]);
+                g.d[i] = 1.0 / h;
+                g
+            }),
+            time,
+        )
+        .d;
+    // ∂L/∂q₀ = ∇_q L
+    let by_q0 = sys
+        .lagrangian(
+            from_fn(|i| Grad::variable(mid[i], i)),
+            vel.map(Grad::constant),
+            time,
+        )
+        .d;
+    let external = sys.generalized_force(mid, vel, t_mid);
+
+    let mut value = [0.0; N];
+    let mut force = [0.0; N];
+    let mut scale = 0.0_f64;
+    for i in 0..N {
+        let conservative = h * (by_q0[i] - by_d[i]);
+        let pushed = 0.5 * h * external[i];
+        value[i] = p[i] + conservative + pushed;
+        force[i] = by_q0[i] + external[i];
+        scale = scale
+            .max(crate::math::abs(p[i]))
+            .max(crate::math::abs(h * by_q0[i]))
+            .max(crate::math::abs(h * by_d[i]))
+            .max(crate::math::abs(pushed));
+    }
+    Residual {
+        value,
+        force,
+        scale,
+    }
+}
+
+/// The residual's exact derivative with respect to `d`: the residual's two
+/// gradients, each carried one derivative further along every `d_j`, `2N`
+/// evaluations of the Lagrangian in all.
+fn jacobian<L: Lagrangian<N> + ?Sized, const N: usize>(
+    sys: &L,
+    q: [f64; N],
+    d: [f64; N],
+    t_mid: f64,
+    h: f64,
+) -> [[f64; N]; N] {
+    let (mid, vel) = midpoint(q, d, h);
     let unit = |i: usize, j: usize| if i == j { 1.0 } else { 0.0 };
     let time = Dual::constant(Grad::<N>::constant(t_mid));
-
-    // by_d.d   = ∂L/∂d   = ½·∇_q L + ∇_q̇ L / h
-    // by_q0.d  = ∂L/∂q₀  = ∇_q L
-    let mut by_d = [0.0; N];
-    let mut by_q0 = [0.0; N];
     let mut jacobian = [[0.0; N]; N];
     for j in 0..N {
         let along_d = sys.lagrangian(
@@ -253,14 +328,12 @@ fn residual<L: Lagrangian<N> + ?Sized, const N: usize>(
             from_fn(|i| Dual::new(Grad::constant(vel[i]), Grad::constant(unit(i, j) / h))),
             time,
         );
-        by_d = along_d.val.d;
-        by_q0 = along_q0.val.d;
         for i in 0..N {
             jacobian[i][j] = h * (along_q0.eps.d[i] - along_d.eps.d[i]);
         }
     }
 
-    // The non-conservative force and its derivative with respect to d.
+    // The non-conservative force's derivative with respect to d.
     let external = sys.generalized_force(
         from_fn(|i| {
             let mut g = Grad::constant(mid[i]);
@@ -274,28 +347,10 @@ fn residual<L: Lagrangian<N> + ?Sized, const N: usize>(
         }),
         Grad::<N>::constant(t_mid),
     );
-
-    let mut value = [0.0; N];
-    let mut force = [0.0; N];
-    let mut scale = 0.0_f64;
     for i in 0..N {
-        let conservative = h * (by_q0[i] - by_d[i]);
-        let pushed = 0.5 * h * external[i].val;
-        value[i] = p[i] + conservative + pushed;
-        force[i] = by_q0[i] + external[i].val;
-        scale = scale
-            .max(crate::math::abs(p[i]))
-            .max(crate::math::abs(h * by_q0[i]))
-            .max(crate::math::abs(h * by_d[i]))
-            .max(crate::math::abs(pushed));
         for j in 0..N {
             jacobian[i][j] += 0.5 * h * external[i].d[j];
         }
     }
-    Residual {
-        value,
-        jacobian,
-        force,
-        scale,
-    }
+    jacobian
 }

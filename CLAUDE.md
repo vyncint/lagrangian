@@ -15,10 +15,10 @@ The short version of the house rules: Conventional Commits, `git commit -s` for 
 - `crates/bevy_lagrangian` — Bevy plugin, published separately.
 - `examples/egui_playground` — Interactive native & WASM (`Trunk.toml`) playground. Workspace member, `publish = false`.
 - `examples/ode_adapters` — `accelerations` as the right-hand side for `ode_solvers` and `diffsol`. Workspace member, `publish = false`.
-- `benches` — Criterion benchmarks. Workspace member, `publish = false`.
+- `benches` — Benchmarks with a dependency-free timing loop (`cargo bench -p benches`), and `examples/profiles.rs` for the build-profile table. Workspace member, `publish = false`. CI builds them and runs none: a shared runner's time is not a baseline.
 - `.github/`, `tools/` — CI, commit-policy enforcement, release automation and the local gate runner, sharing one pattern with the maintainer's other repositories.
 
-Only `crates/lagrangian` exists so far; the other members are planned (`PLAN.md` §8).
+Only `crates/lagrangian` and `benches` exist so far; the other members are planned (`PLAN.md` §8).
 
 ## Hard Architectural Rules
 1. **`#![no_std]` Core, `alloc` Optional:** `crates/lagrangian` MUST compile with `--no-default-features --features libm` and no `alloc`. That build includes the engine functions, `Stepper`, `Segment<N>` and all solvers. `Trajectory<N>`, `simulate()` and `crossings()` sit behind the `alloc` feature. `std` implies `alloc`. Enabling neither `std` nor `libm` is a `compile_error!`.
@@ -45,7 +45,7 @@ Only `crates/lagrangian` exists so far; the other members are planned (`PLAN.md`
 7. **Interpolant Error Is Separate From Step Error:** The step controller does not bound mid-step error. Mid-step velocity carries $\mathcal{O}(h^5)$ truncation error, measured at 5× the knot error at default tolerances and 22× at tight ones on a chaotic double pendulum. Tests set separate thresholds for knots and for mid-step samples.
 8. **Variational Step Solves For Increments:** Newton's unknown is $\Delta q = q_{k+1} - q_k$, with midpoint $q_k + \Delta q / 2$ and velocity $\Delta q / h$. NEVER form $(q_{k+1} - q_k) / h$ from stored positions: it amplifies roundoff by $|q| / h$ and costs about three orders of magnitude in momentum conservation.
 9. **Variational Momentum Update:** $p_{k+1} = p_k + h\,(\nabla_q L + Q)$ at the midpoint, NOT $D_2 L_d + \tfrac{h}{2} Q$ evaluated separately. The two agree to the Newton residual, but only the first leaves the momentum of a cyclic coordinate untouched to the last bit, because $\partial L / \partial q_i$ of a coordinate $L$ does not depend on is exactly `0.0`.
-10. **Newton Stops On The Residual:** Converged when the residual is at the rounding level of the terms it was summed from (`NewtonMonitor`), never on a fixed absolute tolerance and never on the size of the update relative to the unknown, which is zero at an equilibrium.
+10. **Newton Stops On The Residual:** Converged when the residual is at the rounding level of the terms it was summed from (`NewtonMonitor`), never on a fixed absolute tolerance and never on the size of the update relative to the unknown, which is zero at an equilibrium. Compute the residual first (two gradient passes) and its Jacobian ($2N$ second-order passes) only when an update is needed. The variational step factors the Jacobian once per substep and keeps it while each update shrinks the residual fourfold (`PLAN.md` §7.3).
 11. **Fixed Steps Count From An Anchor:** A fixed-step solver's time is `anchor + n * dt`, never `t += dt`, and a step that lands on its own grid point does not move the anchor. Ten thousand additions of `0.1` drift by thousands of ulps, and a run made in pieces must take the same steps as a run made in one go.
 12. **Every Loop Is Bounded:** A loop whose exit waits for floating point to reach a value must also count. The adaptive step is capped at `f64::MAX`, a landing step is decided by comparing lengths and never by rounded times, one call makes a bounded number of attempts, time spans must be finite, and sample counts are clamped. In 0.1.0 a pendulum at rest grew its step to infinity and the next call never returned.
 13. **Non-Finite Is Not Singular:** A linear solve that fails because the matrix holds a `NaN` or an infinity reports `NonFiniteState`; only a finite matrix that cannot be inverted is a `SingularMassMatrix`.

@@ -10,6 +10,45 @@ heading, in a bullet that begins **Breaking:**.
 
 ## [Unreleased]
 
+### Added
+
+- A performance section in the README and the crate documentation, measured
+  by a new `benches` workspace member, which is not published ([#12]). It
+  gives the cost of the engine from 2 to 32 coordinates and of each solver,
+  and records why the mass matrix keeps its `N` passes ([#14]).
+- Debug builds: the engine is compiled in your crate, so a default debug
+  build runs it 40 times slower than a release one, and raising only this
+  crate's optimization level does not help. The documentation recommends
+  `[profile.dev] opt-level = 1`, which brings it within a third of release
+  speed ([#15]).
+
+### Changed
+
+- `simulate` and `Trajectory::extend` refuse an end time that is not finite
+  with `InvalidConfig` ([#5]). An infinite one ran until `max_steps`, and a
+  `NaN` one returned at once having done nothing.
+- `Trajectory::crossings_with` looks at no more than 2¹⁶ points inside each
+  step, and `Trajectory::energy_drift` takes no more than 2²⁰ samples
+  ([#5]). `usize::MAX` used to mean a call that never returned.
+- `Trajectory::start` and the first of `Trajectory::knots` are where the
+  first segment starts, when there is one ([#8]). A file whose initial state
+  disagreed with its first segment sampled to one at its start time and to
+  the other just after it.
+- `Stepper::set_state` also resets the step size and the error history: the
+  next step is the one a new stepper would take from that state.
+- A fixed step too short for the clock to advance at the current time is
+  reported as `StepSizeUnderflow`. The message of that error no longer
+  mentions a tolerance.
+- The documentation of `SimConfig::max_steps` and `simulate` gives the memory
+  a call can hold, and SECURITY.md lists what bounds each resource ([#5]).
+- The variational solvers take 15–20% less time per step ([#13]). Their
+  implicit step computed the full Jacobian of its residual on every Newton
+  iteration, the last included. It now computes the residual alone first,
+  factors the Jacobian once per substep, and keeps it while the iteration
+  converges quickly. On the chaotic double pendulum, `Variational4` at
+  `dt = 0.005` went from 2.9 to 2.3 µs per step, with the same accuracy.
+
+
 ### Fixed
 
 - `Stepper::step` can no longer hang ([#4]). At rest the adaptive step grew
@@ -40,25 +79,6 @@ heading, in a bullet that begins **Breaking:**.
   overflows between the ends of its segment, or an initial state that is not
   finite ([#8]). `Trajectory::push` holds a segment to the same rules.
 
-### Changed
-
-- `simulate` and `Trajectory::extend` refuse an end time that is not finite
-  with `InvalidConfig` ([#5]). An infinite one ran until `max_steps`, and a
-  `NaN` one returned at once having done nothing.
-- `Trajectory::crossings_with` looks at no more than 2¹⁶ points inside each
-  step, and `Trajectory::energy_drift` takes no more than 2²⁰ samples
-  ([#5]). `usize::MAX` used to mean a call that never returned.
-- `Trajectory::start` and the first of `Trajectory::knots` are where the
-  first segment starts, when there is one ([#8]). A file whose initial state
-  disagreed with its first segment sampled to one at its start time and to
-  the other just after it.
-- `Stepper::set_state` also resets the step size and the error history: the
-  next step is the one a new stepper would take from that state.
-- A fixed step too short for the clock to advance at the current time is
-  reported as `StepSizeUnderflow`. The message of that error no longer
-  mentions a tolerance.
-- The documentation of `SimConfig::max_steps` and `simulate` gives the memory
-  a call can hold, and SECURITY.md lists what bounds each resource ([#5]).
 
 ## [0.1.0] - 2026-11-25
 
@@ -110,5 +130,9 @@ The first release: the core crate.
 [#5]: https://github.com/vyncint/lagrangian/issues/5
 [#7]: https://github.com/vyncint/lagrangian/issues/7
 [#8]: https://github.com/vyncint/lagrangian/issues/8
+[#12]: https://github.com/vyncint/lagrangian/issues/12
+[#13]: https://github.com/vyncint/lagrangian/issues/13
+[#14]: https://github.com/vyncint/lagrangian/issues/14
+[#15]: https://github.com/vyncint/lagrangian/issues/15
 [#16]: https://github.com/vyncint/lagrangian/issues/16
 [0.1.0]: https://github.com/vyncint/lagrangian/releases/tag/v0.1.0
