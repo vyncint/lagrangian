@@ -178,7 +178,7 @@ Every number below is reproduced by a test that runs in CI, on the platform's ma
 | Period of a pendulum swinging to 2.4 rad against the elliptic integral | 1.2e-9 default, 1.1e-12 tight | [`analytic.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/analytic.rs) |
 | Energy of a chaotic double pendulum, Dormand-Prince, `t ∈ [0, 20]`, at the ends of steps | 3.4e-9 default, 8.3e-13 tight | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | The same, sampled between the ends of steps | 1.7e-8 default, 1.9e-11 tight | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
-| Energy of the same pendulum, 4th-order variational, `dt = 0.005`, 10⁴ steps | within 2.1e-5, no growth | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
+| Energy of the same pendulum, 4th-order variational, `dt = 0.005`, 10⁴ steps | within 2.2e-5, no growth | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | Angular momentum of a Kepler orbit, 4th-order variational, 10⁴ steps | 3.7e-16 (rounding) | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | The same with Dormand-Prince, tight, `t ∈ [0, 200]` | 2.5e-12 | [`energy.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/energy.rs) |
 | Jump across a step boundary in position / velocity / acceleration | 2.2e-16 / 2.2e-16 / 3.3e-14 | [`trajectory.rs`](https://github.com/vyncint/lagrangian/blob/main/crates/lagrangian/tests/trajectory.rs) |
@@ -193,7 +193,35 @@ Two things the table says that are easy to miss:
 - **Between the ends of steps the error is larger**, five to twenty times here. The step controller bounds the error where a step ends; in between you are reading an interpolating polynomial with its own error. Tighten the tolerance if mid-step accuracy matters.
 - **The two integrators are for different jobs.** Dormand-Prince is more accurate per unit of work, and its energy error grows with time. The variational integrator's error per step is larger, and its energy error does not grow at all.
 
-**There are no performance numbers** because no benchmark has been written yet. Nothing here is a claim about speed.
+## Performance
+
+Measured in a release build on an Intel Core i5-13500 by the [`benches`](https://github.com/vyncint/lagrangian/tree/main/benches) member of the workspace, `cargo bench -p benches`. [PLAN.md §7.3](https://github.com/vyncint/lagrangian/blob/main/PLAN.md) has the full tables. CI builds the benchmarks and runs none of them: a time measured on a shared runner is not a baseline.
+
+| What | Time |
+| --- | --- |
+| `accelerations` for the double pendulum | 178 ns: 8× its hand-derived equations |
+| One step of the chaotic double pendulum | 1.4 µs Dormand-Prince, 2.3 µs 4th-order variational |
+| `accelerations` for a chain of `N` springs | 0.14 µs at `N = 2`, 2.5 µs at 8, 20 µs at 16, 0.19 ms at 32 |
+
+`accelerations` evaluates your Lagrangian `N + 2` times with dual numbers `O(N)` wide, so its cost grows as `N²` times the cost of `L`. At `N = 16` the mass matrix takes 89% of it.
+
+**Develop with `opt-level = 1`.** The engine is generic over your Lagrangian, so it is compiled in your crate, at your crate's optimization level. A default debug build runs it 40 times slower than a release one, and raising only this crate's level changes nothing. Raising your own does:
+
+```toml
+# Cargo.toml of your crate
+[profile.dev]
+opt-level = 1
+```
+
+| Your crate built with | `accelerations`, double pendulum | `simulate`, `t ∈ [0, 20]` |
+| --- | ---: | ---: |
+| `--release` | 180 ns | 3.8 ms |
+| the default `dev` profile | 7,200 ns | 126 ms |
+| `[profile.dev.package.lagrangian] opt-level = 3` | 7,300 ns | 126 ms |
+| `[profile.dev] opt-level = 1` | 230 ns | 4.6 ms |
+| `[profile.dev] opt-level = 2` | 195 ns | 4.0 ms |
+
+The table is [`benches/examples/profiles.rs`](https://github.com/vyncint/lagrangian/blob/main/benches/examples/profiles.rs), built each of those ways.
 
 ## How it works
 

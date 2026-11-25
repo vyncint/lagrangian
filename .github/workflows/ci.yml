@@ -110,6 +110,9 @@ jobs:
       - run: cargo test -p lagrangian --features serde
       - run: cargo test -p lagrangian --no-default-features --features libm
       - run: cargo test -p lagrangian --no-default-features --features libm,alloc
+      # Builds the benchmarks in the bench profile and runs none: a time
+      # measured on a shared runner is not a baseline (PLAN.md §7.3).
+      - run: cargo bench -p benches --no-run
 
   # `#![no_std]` is a claim, and a host build cannot prove it: on a target
   # that has `std`, a dependency that quietly links it still compiles. The

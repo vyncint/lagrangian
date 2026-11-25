@@ -51,6 +51,7 @@ cargo test --workspace                                   # default features
 cargo test -p lagrangian --features serde
 cargo test -p lagrangian --no-default-features --features libm          # the same physics on libm's sin and cos, no allocator
 cargo test -p lagrangian --no-default-features --features libm,alloc
+cargo bench -p benches --no-run                          # the benchmarks build; none is run, since a shared runner's time is not a baseline
 cargo check -p lagrangian --no-default-features --features libm
 cargo check -p lagrangian --no-default-features --features libm,alloc
 cargo check -p lagrangian --no-default-features --features libm --target thumbv7em-none-eabihf          # bare metal: proves no std and no allocator
@@ -92,8 +93,12 @@ runtime dependencies, and the one dev-dependency is `serde_json`.
   and its solvers, `Segment<N>` and `Trajectory<N>`, and the built-in
   benchmark systems. `tests/` is the physics verification suite, and
   `examples/svg_showcase.rs` draws figures with no dependencies.
+- `benches/` — the benchmarks, with a timing loop and no dependencies:
+  `cargo bench -p benches`, or `cargo bench -p benches -- steppers` for
+  those whose name contains a word. Not published.
 - [PLAN.md](PLAN.md) — positioning, scope and non-goals, and §7, the table of
-  measured baselines every test threshold is derived from.
+  measured baselines every test threshold is derived from, and the measured
+  speed.
 - [PROMPT.md](PROMPT.md) — the implementation specification.
 - [CLAUDE.md](CLAUDE.md) — the architectural rules and the mathematical and
   IEEE-754 invariants. **Read it before touching `ad.rs`, `mechanics.rs`,
