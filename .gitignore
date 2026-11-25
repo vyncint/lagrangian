@@ -1,0 +1,4 @@
+/target
+.DS_Store
+# Trunk's output for the WASM playground (PLAN.md §5).
+/dist

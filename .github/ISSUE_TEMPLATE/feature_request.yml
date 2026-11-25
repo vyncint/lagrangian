@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose an addition or change to the API or tooling
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to simulate or compute, and what makes it hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API / behavior
+      description: Sketch the code you'd want to write. Code beats prose.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried; other tools (an ODE solver crate with hand-derived equations, rapier, a symbolic system) and why they don't fit.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I've read the non-goals and roadmap in PLAN.md §6 and this fits the project's scope.
+          required: true

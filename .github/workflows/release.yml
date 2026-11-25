@@ -1,0 +1,100 @@
+# Release pipeline, triggered by pushing a v*.*.* tag.
+# The human-side checklist lives in docs/RELEASING.md.
+#
+# The shape is copied from https://github.com/vyncint/termlens, which shares
+# this contributor pattern.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+# Never cancel a release mid-publish; a duplicate tag push queues instead.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-version:
+    name: tag matches crate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - name: Compare tag against crates/lagrangian version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "lagrangian") | .version')"
+          echo "tag=${tag} crate=${version}"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag v${tag} does not match crates/lagrangian version ${version}. Bump the version (docs/RELEASING.md) before tagging."
+            exit 1
+          fi
+
+  # Re-run the exact CI gates (fmt, clippy, tests, every feature set, the
+  # no-std targets, msrv, docs, deny, zizmor) on the tagged commit.
+  ci:
+    name: ci
+    needs: verify-version
+    uses: ./.github/workflows/ci.yml
+    # A called workflow's jobs get at most what this job grants, and a job
+    # asking for more fails the whole run before it starts.
+    permissions:
+      contents: read
+
+  publish:
+    name: publish to crates.io
+    needs: ci
+    runs-on: ubuntu-latest
+    # The `release` environment only deploys from v* tags, so an OIDC
+    # publish token can never be minted from a branch.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # crates.io Trusted Publishing (GitHub OIDC)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      # Auth is crates.io Trusted Publishing: the action exchanges this
+      # job's OIDC token for a short-lived publish token, so no secret is
+      # stored on the repository. It needs the crate to exist and to be
+      # linked to this workflow first; docs/RELEASING.md, "Bootstrapping",
+      # covers the very first publish, which cannot come through here.
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - run: cargo publish -p lagrangian --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  github-release:
+    name: GitHub release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Extract notes from CHANGELOG.md
+        run: .github/scripts/extract-changelog.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag

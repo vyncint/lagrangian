@@ -1,0 +1,17 @@
+# Pins local development and CI to the current stable toolchain so that
+# rustfmt/clippy output is reproducible across machines.
+#
+# This is NOT the MSRV. The minimum supported Rust version is declared as
+# `rust-version` in Cargo.toml and verified by the `msrv` CI job, which
+# runs `cargo check --workspace --locked --all-targets` with
+# `RUSTUP_TOOLCHAIN` set to that version — because rustup honours this file
+# over the toolchain the job installs, and without the override the job
+# would check stable (termlens#213).
+#
+# The two targets are what the `no-std` gates compile for: a bare-metal
+# Cortex-M with no operating system, which proves `#![no_std]` and no
+# allocator rather than assuming it, and the browser.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["thumbv7em-none-eabihf", "wasm32-unknown-unknown"]

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Copied from https://github.com/vyncint/termlens, which shares this contributor
+# pattern. Issue numbers in the comments below (#NNN) refer to that repository.
+# check-dco.sh — require a DCO sign-off on every commit in a range.
+#
+# Every non-merge commit must contain a "Signed-off-by: Name <email>" line
+# whose email matches the commit AUTHOR email. Merge commits are exempt
+# (the repo is squash-merge only, so there should be none anyway).
+#
+# Usage:
+#   .github/scripts/check-dco.sh <base>..<head> [composed-sha]
+#   .github/scripts/check-dco.sh <sha>          # single commit and ancestors
+#
+# The optional second argument names the one commit GitHub may have just
+# composed itself by squash-merging a pull request — the tip of a push to
+# main. See the web-flow block below for why that commit is treated
+# differently, and why naming it explicitly is what keeps the check honest.
+# Giving it also marks the run as the push run, the only one on which a
+# web-flow commit is spared the email match (#718); without it, as on a pull
+# request, the committer proves nothing and every commit is held to it.
+#
+# Self-test: tools/dco-gate-selftest/run.sh builds a scratch history and
+# holds every rule here to failing when it should (#471) — above all the
+# composed-squash exemption, which must stay exactly one named commit wide.
+set -euo pipefail
+
+range="${1:?usage: check-dco.sh <range> [composed-sha]}"
+composed="${2:-}"
+# Taken before the name is resolved: a push run whose tip will not resolve
+# is still a push run, and the strict match would red the squashes of all
+# of main's history on a first push. The name itself still exempts nothing.
+push_run=""
+if [ -n "$composed" ]; then
+  push_run=1
+fi
+# Resolve it once, so the comparison below is sha-to-sha rather than
+# text-to-text. Empty (pull_request runs) or unresolvable leaves it empty,
+# which exempts nothing.
+if [ -n "$composed" ]; then
+  composed="$(git rev-parse --verify --quiet "${composed}^{commit}" || true)"
+fi
+
+# Read the range before walking it. A process substitution hides git's exit
+# status, so a range git could not resolve — a shallow clone with no base, an
+# event whose sha is gone, a typo — used to run the loop over nothing and
+# report OK on commits that were never read (termlens#214). Both halves are
+# errors: an unresolvable range, and a range with no commits in it.
+if ! shas="$(git rev-list --no-merges "$range")"; then
+  echo "::error::check-dco: could not resolve the commit range '${range}' —" \
+       "refusing to report a pass on commits that were never read"
+  exit 1
+fi
+if [ -z "$shas" ]; then
+  echo "::error::check-dco: the range '${range}' resolved to no commits"
+  exit 1
+fi
+
+fail=0
+count=0
+while IFS= read -r sha; do
+  count=$((count + 1))
+  author_email="$(git log -1 --format='%ae' "$sha")"
+  committer_email="$(git log -1 --format='%ce' "$sha")"
+
+  # GitHub web-flow commits (squash/merge performed by github.com itself,
+  # committer noreply@github.com) rewrite the author email to the merging
+  # account's GitHub address, so an exact sign-off==author match is
+  # impossible by construction. The underlying PR commits were already
+  # DCO-checked by this workflow's required pull_request run; for the
+  # resulting merge commit we require a sign-off to be present but skip
+  # the email match.
+  #
+  # Only on the push run. The committer is whatever the commit says, and
+  # `GIT_COMMITTER_EMAIL=noreply@github.com` sets it locally, so on a pull
+  # request this rule let any sign-off through on a commit claiming to be
+  # GitHub's (#718). What reaches main has been through a pull request run
+  # first, and that run is strict.
+  if [ -n "$push_run" ] && [ "$committer_email" = "noreply@github.com" ]; then
+    if git log -1 --format='%B' "$sha" | grep -qi '^signed-off-by:'; then
+      continue
+    fi
+
+    # ...except that GitHub composes the squash message itself, and drops
+    # the trailers of the commits it squashed whenever the branch contained
+    # a merge commit — someone pressing "Update branch" is enough. A pull
+    # request in which every commit was signed off then lands on main
+    # carrying no sign-off at all, and repairing it means rewriting main:
+    # linear history, non-fast-forward, and only the admin role's ruleset
+    # bypass can force-push it. Short of the owner rewriting history, the
+    # branch is red forever over a policy that was, in fact, met.
+    #
+    # It was met verifiably: `commit-policy` is a required status check on
+    # main, main accepts nothing except through a pull request, and the
+    # pull_request run checks every commit strictly — sign-off email against
+    # author email. So exempt this commit, and only this commit: the tip of
+    # the push, named by the caller, subject ending in the "(#123)" GitHub
+    # appends. A contributor cannot forge their way in here, because they
+    # cannot be the tip of a push to main without a pull request first.
+    if [ -n "$composed" ] && [ "$sha" = "$composed" ] \
+       && git log -1 --format='%s' "$sha" | grep -Eq '\(#[0-9]+\)$'; then
+      echo "::notice::${sha} is a squash-merge whose message GitHub composed" \
+           "without the trailers of the commits it replaced. Those commits" \
+           "were checked on the pull request."
+      echo "  subject: $(git log -1 --format='%s' "$sha")"
+      continue
+    fi
+
+    echo "::error::Merge/squash commit ${sha} carries no Signed-off-by at all."
+    echo "  subject: $(git log -1 --format='%s' "$sha")"
+    fail=1
+    continue
+  fi
+
+  # Dependabot's own commits, on its pull request branches: GitHub commits
+  # them, and Dependabot signs off as support@github.com, which is never its
+  # author address, so the match below could not pass. Exempt exactly that
+  # pair, author and sign-off both Dependabot's, as check-no-ai-attribution.sh
+  # names it. A forged commit passes here only by claiming to be
+  # Dependabot's on both lines, which signs no person's name to anything.
+  if [ "$committer_email" = "noreply@github.com" ] \
+     && printf '%s\n' "$author_email" | tr '[:upper:]' '[:lower:]' \
+        | grep -Eq '^([0-9]+\+)?dependabot\[bot\]@users\.noreply\.github\.com$' \
+     && git log -1 --format='%B' "$sha" \
+        | grep -Eiq '^signed-off-by:[[:space:]]*dependabot\[bot\][[:space:]]*<support@github\.com>[[:space:]]*$'; then
+    continue
+  fi
+
+  # The sign-off may sit anywhere in the message body: after a squash merge,
+  # GitHub concatenates commit messages, which moves trailers out of the
+  # strict trailer block. Match any "Signed-off-by:" line instead.
+  if ! git log -1 --format='%B' "$sha" \
+      | grep -i '^signed-off-by:' \
+      | grep -qF "<${author_email}>"; then
+    echo "::error::Commit ${sha} has no Signed-off-by matching its author <${author_email}>."
+    echo "  subject: $(git log -1 --format='%s' "$sha")"
+    echo "  fix: 'git commit --amend -s' for the last commit, or" \
+         "'git rebase --signoff' for a branch, then force-push."
+    fail=1
+  fi
+done <<<"$shas"
+
+echo "check-dco: inspected ${count} commit(s) in ${range}"
+if [ "$fail" -ne 0 ]; then
+  echo "::error::DCO check failed. Every commit must be signed off (git commit -s)." \
+       "See CONTRIBUTING.md §5 and https://developercertificate.org"
+  exit 1
+fi
+echo "check-dco: OK"

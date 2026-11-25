@@ -1,0 +1,40 @@
+# cargo-deny configuration — enforced by the `deny` CI job.
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive licenses only. Anything not on this list fails CI and needs an
+# explicit decision here, in a reviewed PR.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Path dependencies without a version are "wildcards" to cargo-deny. The
+# only ones here are unpublished workspace members (examples, benches)
+# depending on the crate under test, and every one of them is
+# `publish = false`, so a version requirement would only be a number to bump
+# on every release. Wildcards on registry dependencies stay denied.
+allow-wildcard-paths = true
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

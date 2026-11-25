@@ -1,0 +1,44 @@
+[package]
+name = "lagrangian"
+description = "Lagrangian mechanics engine: write L = T - V in plain Rust, get exact equations of motion by forward-mode autodiff, symplectic and adaptive integrators, and scrubbable C2 trajectories"
+keywords = ["physics", "mechanics", "simulation", "robotics", "autodiff"]
+categories = ["science", "simulation", "mathematics", "no-std", "wasm"]
+# A symlink to the repository's README, so the packaged crate carries it and
+# `include_str!("../README.md")` (the README doctests in lib.rs) resolves the
+# same way in this checkout and in the unpacked tarball. The two LICENSE
+# files beside it are symlinks for the same reason: both licenses require the
+# text to travel with the code. `check-package-contents.sh` holds the list.
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["std"]
+# Float math from the standard library, and everything `alloc` gives.
+std = ["alloc", "serde?/std"]
+# `Trajectory<N>`, `simulate()` and `crossings()`: the only parts that own a
+# heap allocation. The engine, `Stepper` and `Segment<N>` need none.
+alloc = ["serde?/alloc"]
+# Float math for targets without `std`. With both `std` and `libm` on, `std`
+# wins. With neither, the crate refuses to compile and says why.
+libm = ["dep:libm"]
+# Hand-written `Serialize`/`Deserialize` for `State<N>`, `Segment<N>` and,
+# with `alloc`, `Trajectory<N>`.
+serde = ["dep:serde"]
+
+[dependencies]
+libm = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

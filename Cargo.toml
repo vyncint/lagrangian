@@ -1,0 +1,47 @@
+# lagrangian workspace.
+#
+# `crates/` holds publishable members. Unpublished members (examples with
+# external dependencies, benches) join the workspace as they land; PLAN.md §4
+# has the intended layout.
+
+[workspace]
+resolver = "3"
+members = ["crates/lagrangian"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+# Minimum supported Rust version. Checked by the `msrv` CI job, which reads
+# this field; bumping it is a minor (not patch) change per our SemVer policy.
+#
+# 1.85 is the first release that understands edition 2024.
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vyncint/lagrangian"
+authors = ["Vyncint Ng <vyncint@icloud.com>"]
+
+[workspace.dependencies]
+
+# The only runtime dependency the core may ever have without `std`: float
+# math (sin, cos, sqrt, …) for targets where `core` has none.
+libm = { version = "0.2", default-features = false }
+# The `serde` feature. No derive: serde has no impls for `[T; N]` with a
+# const-generic N, so the impls are written by hand and the proc-macro stack
+# is never built (CLAUDE.md, hard rule 2).
+serde = { version = "1", default-features = false }
+
+# Dev dependencies.
+# The one dev-dependency the core is allowed: the serde round-trip test.
+serde_json = "1"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_code = "warn"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

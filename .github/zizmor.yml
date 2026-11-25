@@ -1,0 +1,23 @@
+# zizmor configuration — accepted findings, each with a rationale.
+# The CI `zizmor` job runs at --persona=pedantic, so anything not listed
+# here fails the build.
+
+rules:
+  # dtolnay/rust-toolchain is deliberate, not superfluous: it pins the
+  # toolchain snapshot by commit SHA, installs rustfmt/clippy components
+  # reproducibly, and honors rust-toolchain.toml — the preinstalled runner
+  # toolchain drifts with the image.
+  superfluous-actions:
+    ignore:
+      - ci.yml
+      - release.yml
+      - canary.yml
+
+  # No cooldown is configured in dependabot.yml (GitHub's built-in default is
+  # three days; zizmor wants seven). Accepted rather than fixed here: the fix
+  # changes dependency-update policy, which is a separate decision from
+  # auditing `.github/`, and it is the same decision in every repository
+  # that shares this setup.
+  dependabot-cooldown:
+    ignore:
+      - dependabot.yml

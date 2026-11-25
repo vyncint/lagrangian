@@ -1,0 +1,66 @@
+name: Bug report
+description: A wrong number, a NaN, a panic, or a build that fails
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: lagrangian version
+      placeholder: "0.0.1 (or git SHA)"
+    validations:
+      required: true
+
+  - type: input
+    id: features
+    attributes:
+      label: Enabled features
+      description: Cargo features enabled for lagrangian.
+      placeholder: "default (std) / no default features + libm + alloc / + serde"
+    validations:
+      required: false
+
+  - type: input
+    id: target
+    attributes:
+      label: Target and toolchain
+      description: The target triple and `rustc --version`. Float math differs between `std` and `libm`, so this matters.
+      placeholder: "x86_64-unknown-linux-gnu, rustc 1.100.0 / wasm32-unknown-unknown / thumbv7em-none-eabihf"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: >
+        The smallest complete program that shows the problem: the `Lagrangian`
+        implementation, the initial state, the solver and its tolerances —
+        ideally one of the built-in systems rather than your own.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs measured
+      description: >
+        The number you got and the number you expected, with where the
+        expectation comes from (a closed form, a conservation law, another
+        solver). "Energy drift 3e-6 at rtol 1e-9 over t in [0, 50]" is a
+        report we can act on; "energy is not conserved" is not.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of failure is it?
+      options:
+        - "A wrong result (accuracy, conservation, a derivative)"
+        - "NaN or infinity where a finite value was expected"
+        - "A panic or an unexpected error"
+        - "A build failure (features, target, MSRV)"
+        - "Something else"
+    validations:
+      required: true

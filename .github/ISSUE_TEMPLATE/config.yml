@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / usage help
+    url: https://github.com/vyncint/lagrangian/discussions/new?category=q-a
+    about: Ask usage questions in the Q&A category on Discussions — a bug reproduction is not needed.

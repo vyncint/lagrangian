@@ -1,0 +1,115 @@
+# Copied from https://github.com/vyncint/termlens, which shares this contributor
+# pattern. Issue numbers in the comments below (#NNN) refer to that repository.
+# Enforces two commit policies on every commit in a PR (and on pushes to
+# main, for direct pushes while the project is solo-maintained):
+#
+#   1. DCO: every commit is signed off, and the sign-off email matches the
+#      commit author (.github/scripts/check-dco.sh).
+#   2. No AI attribution: no AI co-author trailers, "Generated with"
+#      watermarks, or bot identities (.github/scripts/check-no-ai-attribution.sh).
+#
+# Why CI and not git hooks: hooks don't survive `git clone`, so a local
+# commit-msg hook only ever protects the maintainer's machine. CI is the
+# enforceable boundary for external contributors. (.claude/settings.json in
+# the repo is a soft guard for agent users; this workflow is the hard one.)
+name: commit-policy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One group per commit on main, and nothing on main cancelled: a push that
+# landed while the last one was still being checked cancelled that check,
+# and a group's pending run is dropped when another queues (#656). A pull
+# request keeps one group, so a push supersedes its last.
+concurrency:
+  group: commit-policy-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  commit-policy:
+    name: commit-policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # one-time failure comment on PRs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # need full history to walk the commit range
+
+      - name: Determine commit range
+        id: range
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            # Both ends must be readable here, or the range is not a range:
+            # a sha this checkout does not have made the scripts walk nothing
+            # and report OK on commits they never read (#214). The scripts
+            # now refuse that too; this names the missing commit first.
+            for sha in "$BASE" "$HEAD"; do
+              git cat-file -e "$sha" 2>/dev/null \
+                || { echo "::error::commit $sha is not in this checkout, so the range cannot be checked"; exit 1; }
+            done
+            range="${BASE}..${HEAD}"
+          elif [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            # First push to the branch (or force push whose old tip is gone):
+            # inspect the pushed head's full history.
+            range="$AFTER"
+          else
+            range="${BEFORE}..${AFTER}"
+          fi
+          echo "Checking range: $range"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
+      - name: DCO sign-off
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+          # On a push to main, the tip is the commit GitHub composed by
+          # squash-merging a pull request. Naming it lets the check tell that
+          # one commit apart from anything else with a web-flow committer, so
+          # a message GitHub wrote without the trailers it squashed does not
+          # fail a pull request that was, in fact, signed off. Empty on
+          # pull_request runs, where nothing is exempt.
+          COMPOSED: ${{ github.event_name == 'push' && github.event.after || '' }}
+        run: .github/scripts/check-dco.sh "$RANGE" "$COMPOSED"
+
+      - name: No AI attribution
+        # Run even when the DCO step failed, so one run reports everything.
+        if: always() && steps.range.outcome == 'success'
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: .github/scripts/check-no-ai-attribution.sh "$RANGE"
+
+      - name: Comment on PR (policy failed)
+        if: failure() && github.event_name == 'pull_request'
+        # Forks get a read-only token; never let the courtesy comment itself
+        # flip the job's outcome.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker="<!-- lagrangian-commit-policy -->"
+          if gh api "repos/${REPO}/issues/${PR}/comments" --jq '.[].body' | grep -qF "$marker"; then
+            echo "Policy comment already posted; skipping."
+            exit 0
+          fi
+          body="$(printf '%s\n\n%s\n\n%s' \
+            "$marker" \
+            "**Commit policy check failed.** AI assistance is welcome; AI attribution is not. Remove the trailer and recommit — you are the author of record." \
+            "Also make sure every commit carries a DCO sign-off matching its author (\`git commit -s\`; fix a branch with \`git rebase --signoff\` and force-push). The offending commits are listed in the [job log](${RUN_URL}).")"
+          gh pr comment "$PR" --repo "$REPO" --body "$body"

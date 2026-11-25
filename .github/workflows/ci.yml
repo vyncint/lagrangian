@@ -1,0 +1,275 @@
+# The shape of this workflow is copied from https://github.com/vyncint/termlens,
+# which shares this contributor pattern. Where a comment cites a number as
+# `termlens#NNN`, the lesson was learned there.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Reused by release.yml so a release re-runs the exact same gates.
+  workflow_call:
+
+permissions:
+  contents: read
+
+# One group per commit on main. A group holds one pending run, and GitHub
+# cancels the pending one when another queues, cancel-in-progress or not:
+# merges that land close together would leave commits on main with no CI run
+# of their own (termlens#656). A pull request keeps one group, so a push
+# supersedes its last.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Every job runs on Linux. The crate is pure arithmetic over `f64` with no
+# operating-system surface, so a second host would re-run the same floating
+# point on the same IEEE-754 semantics; the targets that can actually differ
+# (no `std`, no allocator, the browser) are compiled for in `no-std` below.
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The reduced sets select the library alone: with --workspace, another
+      # member's feature request is unified into the library and the
+      # "minimal" build being linted is not minimal (termlens#324).
+      - run: cargo clippy -p lagrangian --all-targets --no-default-features --features libm -- -D warnings
+      - run: cargo clippy -p lagrangian --all-targets --no-default-features --features libm,alloc -- -D warnings
+
+  # The physics verification suite: every numeric claim the README makes is
+  # reproduced by a test in here (CLAUDE.md, "Claims & Threshold Discipline").
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test --workspace --all-features
+      # The README is shipped as the crate's readme, and crates.io rewrites a
+      # relative link against crates/lagrangian/ rather than the repo root,
+      # so it may carry absolute links only. CONTRIBUTING and docs/ are not
+      # packaged and may keep relative links; what they may not keep is a
+      # target that is gone. The pull-request template is read in a pull
+      # request body, where a relative link resolves against the pull
+      # request's URL.
+      - run: .github/scripts/check-readme-links.sh README.md CONTRIBUTING.md .github/PULL_REQUEST_TEMPLATE.md docs/*.md
+
+  # Every feature configuration a consumer can ask for. `test` runs
+  # --all-features; this job runs the default set (what `cargo add
+  # lagrangian` produces) and each reduced one. A reduced configuration
+  # selects the library alone, so nothing another member asks for is unified
+  # in, and `check-dependency-tree.sh` asserts the hard rule the reduced sets
+  # exist to protect: zero runtime dependencies by default, `libm` alone
+  # without `std`.
+  #
+  # The two libm legs are the same physics on a different math library: a
+  # threshold that only holds with the platform's `sin` and `cos` is a claim
+  # about glibc, not about this crate.
+  features:
+    name: features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: .github/scripts/check-dependency-tree.sh
+      - run: cargo test --workspace
+      - run: cargo test -p lagrangian --features serde
+      - run: cargo test -p lagrangian --no-default-features --features libm
+      - run: cargo test -p lagrangian --no-default-features --features libm,alloc
+
+  # `#![no_std]` is a claim, and a host build cannot prove it: on a target
+  # that has `std`, a dependency that quietly links it still compiles. The
+  # bare-metal Cortex-M target has no `std` to link and, without the `alloc`
+  # feature, no allocator either, so these builds fail the moment either
+  # sneaks in. wasm32-unknown-unknown is the browser target the playground
+  # ships to. Checks only: nothing here is linked or run.
+  no-std:
+    name: no-std
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: thumbv7em-none-eabihf,wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo check -p lagrangian --no-default-features --features libm
+      - run: cargo check -p lagrangian --no-default-features --features libm,alloc
+      - run: cargo check -p lagrangian --no-default-features --features libm --target thumbv7em-none-eabihf
+      - run: cargo check -p lagrangian --no-default-features --features libm,alloc --target thumbv7em-none-eabihf
+      - run: cargo check -p lagrangian --target wasm32-unknown-unknown
+
+  # CONTRIBUTING §1 promises that every gate above is reproducible locally
+  # and that the workflow is the source of truth when the two disagree. This
+  # is the check that makes the promise hold, followed by the self-tests
+  # that prove each script gate can fail before a green run of it is trusted.
+  gates-listed:
+    name: gates-listed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: .github/scripts/check-ci-gates-listed.sh
+      - run: tools/link-gate-selftest/run.sh
+      - run: tools/attribution-gate-selftest/run.sh
+      - run: tools/dco-gate-selftest/run.sh
+      - run: tools/preflight-selftest/run.sh
+      - run: tools/gates-listed-selftest/run.sh
+      - run: tools/release-notes-selftest/run.sh
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          msrv="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+          echo "MSRV: ${msrv}"
+          echo "msrv=${msrv}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ steps.msrv.outputs.msrv }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # rust-toolchain.toml pins stable so that fmt and clippy output is
+      # reproducible, and rustup honours that file over the `rustup default`
+      # the action above sets — so without the override this job would
+      # install the MSRV and then run stable (termlens#213). RUSTUP_TOOLCHAIN
+      # outranks the file, and the assertion makes the no-op impossible to
+      # bring back quietly.
+      - name: Assert the MSRV toolchain is the one in use
+        env:
+          MSRV: ${{ steps.msrv.outputs.msrv }}
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.msrv }}
+        run: |
+          rustc -vV
+          rustc -vV | grep -q "^release: ${MSRV}" \
+            || { echo "::error::the msrv job is not running rustc ${MSRV}"; exit 1; }
+      # --all-targets: tests and examples compile against the same floor, so
+      # they are part of the claim.
+      - run: cargo check --workspace --locked --all-targets
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.msrv }}
+      # --all-targets does not enable optional features. Both ends of the
+      # feature axis, for the library alone so nothing is unified in.
+      - run: cargo check -p lagrangian --all-features --all-targets --locked
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.msrv }}
+      - run: cargo check -p lagrangian --no-default-features --features libm --all-targets --locked
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.msrv }}
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo doc --no-deps
+      - run: cargo doc --no-deps --all-features
+      # The published crate carries its README and both license texts, and
+      # nothing from outside an allowlist: the planning documents at the
+      # repository root are not part of the product.
+      - run: .github/scripts/check-package-contents.sh
+      # SECURITY.md says the crate contains no `unsafe`; this holds the
+      # sentence to the code.
+      - run: .github/scripts/check-forbid-unsafe.sh
+
+  deny:
+    name: deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+
+  # Security audit of everything under .github (template injection,
+  # credential persistence, unpinned actions, …). Accepted findings live in
+  # .github/zizmor.yml.
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit .github at pedantic level
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Version pinned; bump deliberately alongside a fresh local audit.
+        # pipx ships on the runner image (uv/uvx does not).
+        #
+        # One retry after a pause: the online audits call the GitHub
+        # advisories API, and a transient network error there must not block
+        # a release. A genuine finding fails identically on the retry, so
+        # nothing real can slip through.
+        run: |
+          audit() { pipx run zizmor==1.29.0 --persona=pedantic .github/; }
+          audit || {
+            echo "::warning::zizmor failed; retrying once in 30s in case of a transient online-audit network error"
+            sleep 30
+            audit
+          }
+
+  # Single stable job name for branch protection: require this one check and
+  # matrix/job changes never break the required-checks configuration.
+  required-green:
+    name: required-green
+    if: always()
+    needs: [fmt, clippy, test, features, no-std, gates-listed, msrv, docs, deny, zizmor]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every needed job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq .
+          echo "$NEEDS" | jq -e 'to_entries | all(.value.result == "success")' > /dev/null
