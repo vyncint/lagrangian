@@ -36,10 +36,19 @@ What the project does continuously, enforced by required CI on every change:
   granted per job, and inputs reach shell steps only via environment
   variables. Accepted findings are documented in `.github/zizmor.yml`.
 - **Release integrity**: releases re-run the full CI gates before anything
-  is published. Publishing uses a crates.io API token held as a repository
-  secret, because a crate's first publish cannot use Trusted Publishing;
-  moving to short-lived OIDC tokens and deleting the secret is the next
-  step in `docs/RELEASING.md`.
+  is published, and publish through crates.io Trusted Publishing: the
+  release job's OIDC token is exchanged for a crates.io token that lives
+  for that job. No publish token is stored in the repository or anywhere
+  else. The job runs in the `release` environment, which deploys only from
+  `v*` tags, and the `release tags` ruleset lets only a maintainer create,
+  move or delete such a tag.
+- **Repository settings**, readable through the GitHub API: private
+  vulnerability reporting is on; secret scanning and push protection are
+  on; the `main` ruleset requires a pull request, the `required-green` and
+  `commit-policy` checks, linear history and squash merges, and blocks
+  force pushes and deletion, with no one able to bypass it; workflows may
+  use only GitHub's own actions and the four third-party actions they pin,
+  each by commit.
 - **Provenance**: every commit requires a DCO sign-off, and CI rejects
   bot-authored commits except Dependabot's, which is exempt from the
   identity rule only: its messages are checked like any other

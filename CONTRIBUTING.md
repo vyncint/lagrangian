@@ -249,7 +249,16 @@ widening it is a visible decision.
   Conventional Commit form. Branches are deleted on merge.
 - Required checks: `required-green`, which needs every CI job — `fmt`,
   `clippy`, `test`, `features`, `no-std`, `gates-listed`, `msrv`, `docs`,
-  `deny` and `zizmor` — plus `commit-policy` (DCO + attribution).
+  `deny` and `zizmor` — plus `commit-policy` (DCO + attribution). The
+  `main` ruleset enforces them, along with a pull request for every change,
+  squash merges and linear history; nobody can push to `main` directly or
+  bypass it. Tags matching `v*` publish a release, and only a maintainer
+  can create one.
+- Workflows may use GitHub's own actions and the four third-party actions
+  they already pin by commit (`dtolnay/rust-toolchain`,
+  `Swatinem/rust-cache`, `EmbarkStudios/cargo-deny-action`,
+  `rust-lang/crates-io-auth-action`). A new one is a repository setting to
+  change as well as a line to add.
 - **Every change lands with a test, and the test must be able to fail.** If
   you add a guard, break it once and watch it go red before you commit.
 - **Say what you did not do.** A PR that lists what it left out and why is
