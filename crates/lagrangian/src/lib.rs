@@ -80,6 +80,49 @@
 //! opt-level = 1
 //! ```
 //!
+//! # Stack
+//!
+//! Nothing here allocates, so everything the engine works on lives on the
+//! stack, and the need grows with the square of `N`: every call to your
+//! [`Lagrangian`] takes `q` and `q̇` as arrays of dual numbers `2(N + 1)`
+//! floats wide, and `4(N + 1)` in [`linearize`]. The smallest thread stack
+//! each call completes in, for a chain of `N` springs with one cosine per
+//! coordinate, on `x86_64` Linux; 16 KiB is the least a Linux thread gets.
+//!
+//! | `N` | `accelerations` | `eom_terms` | Dopri5 step | Variational4 step | `linearize_free` |
+//! | ---: | ---: | ---: | ---: | ---: | ---: |
+//! | release, ≤ 8 | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB |
+//! | release, 16 | 38 KiB | 32 KiB | 47 KiB | 64 KiB | 83 KiB |
+//! | release, 32 | 189 KiB | 166 KiB | 206 KiB | 279 KiB | 470 KiB |
+//! | release, 64 | 636 KiB | 583 KiB | 724 KiB | 981 KiB | 1.5 MiB |
+//! | release, 128 | 2.5 MiB | 2.3 MiB | 2.7 MiB | 3.7 MiB | |
+//! | debug, 4 | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | ≤ 16 KiB | 29 KiB |
+//! | debug, 8 | 33 KiB | 32 KiB | 41 KiB | 45 KiB | 64 KiB |
+//! | debug, 16 | 87 KiB | 83 KiB | 99 KiB | 112 KiB | 197 KiB |
+//! | debug, 32 | 292 KiB | 279 KiB | 304 KiB | 362 KiB | 693 KiB |
+//! | debug, 64 | 1.0 MiB | 981 KiB | 1.0 MiB | 1.2 MiB | 2.5 MiB |
+//!
+//! `tests/stack.rs` runs each operation at `N = 8`, 16 and 32 in a thread
+//! with half again the figure for its profile. A Lagrangian with more
+//! temporaries needs more.
+//!
+//! What an overflow does depends on the target, and so does the remedy:
+//!
+//! - **Operating systems:** the process aborts with "thread … has
+//!   overflowed its stack". A spawned thread gets 2 MiB unless told
+//!   otherwise, and so does each test thread; give a thread more with
+//!   `std::thread::Builder::stack_size`, and tests with `RUST_MIN_STACK`.
+//! - **`wasm32-unknown-unknown`:** the stack is 1 MiB, placed below the
+//!   static data, and an overflow traps with "memory access out of bounds"
+//!   without touching that data. Raise it with
+//!   `-C link-arg=-zstack-size=<bytes>`.
+//! - **Bare metal:** with `cortex-m-rt`'s default memory layout the stack
+//!   grows down into `.bss` and `.data` with no guard, so an overflow can
+//!   corrupt memory silently: the one hazard `#![forbid(unsafe_code)]`
+//!   cannot rule out. Size the stack from the table, and place it below the
+//!   static data, with `flip-link` or a linker script, so that an overflow
+//!   faults instead.
+//!
 //! # What it is not
 //!
 //! Coordinates must be minimal: there are no constraint forces or Lagrange

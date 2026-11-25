@@ -541,8 +541,9 @@ const LIMIT_SHORT: f64 = 4e-11;
 
 #[test]
 fn a_subnormal_acceleration_is_the_one_inexact_start() {
-    // Documented on `Segment`: halving a subnormal acceleration can lose its
-    // last bit. Position and velocity stay exact.
+    // Documented on `Segment`: halving an acceleration below
+    // 2·f64::MIN_POSITIVE can lose its last bit, since its half is
+    // subnormal. Position and velocity stay exact.
     let orbit = KeplerOrbit::default();
     let mut stepper = Stepper::new(
         &orbit,

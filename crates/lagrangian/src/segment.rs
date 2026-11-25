@@ -40,8 +40,9 @@ impl<const N: usize> State<N> {
 /// step, so its first three coefficients are the starting position,
 /// velocity and half the starting acceleration themselves.
 /// [`start`](Segment::start) therefore returns the solver's knot bit for
-/// bit, with one exception: an acceleration below `f64::MIN_POSITIVE` in
-/// magnitude (a subnormal number) can lose its last bit to the halving. The
+/// bit, with one exception: an acceleration below `2·f64::MIN_POSITIVE`
+/// in magnitude, about `4.5e-308`, has a subnormal half and can lose its
+/// last bit to the halving. The
 /// end of a segment agrees with the start of the next to rounding
 /// (`PLAN.md` §7).
 ///

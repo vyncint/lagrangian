@@ -212,18 +212,18 @@ fn discrete_step<L: Lagrangian<N> + ?Sized, const N: usize>(
                 velocity: d.map(|x| x / h),
             });
         }
-        let lu = match factored {
-            Some(lu) if size <= KEEP_JACOBIAN * last => lu,
-            _ => {
-                let jacobian = jacobian(sys, q, d, t_mid, h);
-                Lu::factor(&jacobian).ok_or_else(|| solve_failure(&jacobian, t))?
-            }
-        };
-        factored = Some(lu);
+        // One factorization is held at a time, and the matrix it came from
+        // lives only in the frame that builds it: at N = 32 each is 8 KiB.
+        let keep = factored.is_some() && size <= KEEP_JACOBIAN * last;
+        if !keep {
+            factored = Some(factored_jacobian(sys, q, d, t, t_mid, h)?);
+        }
         last = size;
-        let update = lu.solve(&r.value.map(|x| -x));
-        for i in 0..N {
-            d[i] += update[i];
+        if let Some(lu) = &factored {
+            let update = lu.solve(&r.value.map(|x| -x));
+            for i in 0..N {
+                d[i] += update[i];
+            }
         }
     }
     Err(SimError::NewtonDidNotConverge { t })
@@ -295,16 +295,17 @@ fn residual<L: Lagrangian<N> + ?Sized, const N: usize>(
     }
 }
 
-/// The residual's exact derivative with respect to `d`: the residual's two
-/// gradients, each carried one derivative further along every `d_j`, `2N`
-/// evaluations of the Lagrangian in all.
-fn jacobian<L: Lagrangian<N> + ?Sized, const N: usize>(
+/// The residual's exact derivative with respect to `d`, factored: the
+/// residual's two gradients, each carried one derivative further along
+/// every `d_j`, `2N` evaluations of the Lagrangian in all.
+fn factored_jacobian<L: Lagrangian<N> + ?Sized, const N: usize>(
     sys: &L,
     q: [f64; N],
     d: [f64; N],
+    t: f64,
     t_mid: f64,
     h: f64,
-) -> [[f64; N]; N] {
+) -> Result<Lu<N>, SimError> {
     let (mid, vel) = midpoint(q, d, h);
     let unit = |i: usize, j: usize| if i == j { 1.0 } else { 0.0 };
     let time = Dual::constant(Grad::<N>::constant(t_mid));
@@ -352,5 +353,5 @@ fn jacobian<L: Lagrangian<N> + ?Sized, const N: usize>(
             jacobian[i][j] += 0.5 * h * external[i].d[j];
         }
     }
-    jacobian
+    Lu::factor(&jacobian).ok_or_else(|| solve_failure(&jacobian, t))
 }

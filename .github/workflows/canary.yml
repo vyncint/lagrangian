@@ -8,7 +8,8 @@ name: canary
 # every pull request on 2026-11-16 (#749), with no warning; six weeks of beta
 # would have shown it. This runs the gates a new compiler is most likely to
 # break (clippy with -D warnings, the whole suite, rustdoc with -D warnings) on
-# beta and nightly, once a week and on demand.
+# beta and nightly, once a week and on demand, and then the randomized
+# robustness harness for ten minutes on each.
 #
 # It is not required and never blocks a merge: a red canary is news about the
 # next toolchain, not about a pull request. Its status is on the Actions tab
@@ -52,3 +53,11 @@ jobs:
       - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+      # The randomized robustness harness for ten minutes, from seeds that
+      # change with every run. CI runs the first seeds for two seconds on
+      # every change; this is the long search for what they miss. A failure
+      # names the seed and the case (crates/lagrangian/tests/robustness.rs).
+      - run: cargo test -p lagrangian --release --all-features --test robustness -- --nocapture
+        env:
+          LAGRANGIAN_ROBUSTNESS_SECONDS: "600"
+          LAGRANGIAN_ROBUSTNESS_SEED: ${{ github.run_number }}001
